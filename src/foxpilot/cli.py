@@ -13,12 +13,14 @@ from typing import Optional
 import typer
 
 from foxpilot.core import (
-    REMOTE_DEBUG_PORT,
     activate_tab,
     browser,
     describe_element,
+    extract_assets,
+    extract_styles,
     feedback,
     find_element,
+    fullpage_screenshot,
     list_tabs,
     read_page,
 )
@@ -50,7 +52,7 @@ def _mode(override: str = "") -> str:
 
 @app.command(name="tabs")
 def cmd_tabs():
-    """List all open tabs (requires --zen + Zen running with --remote-debugging-port)."""
+    """List all open tabs (requires --zen + Zen running with --marionette)."""
     try:
         tab_list = list_tabs()
     except RuntimeError as e:
@@ -61,16 +63,8 @@ def cmd_tabs():
         typer.echo("(no tabs found)")
         return
 
-    # Try to mark the active tab
-    active_url = ""
-    try:
-        with browser(mode="zen") as driver:
-            active_url = driver.current_url
-    except Exception:
-        pass
-
     for i, tab in enumerate(tab_list):
-        marker = ">" if tab.get("url") == active_url else " "
+        marker = ">" if tab.get("active") else " "
         typer.echo(f"{marker}[{i}] {tab.get('title', '(no title)')}")
         typer.echo(f"     {tab.get('url', '')}")
 
@@ -422,6 +416,91 @@ def cmd_close_tab(
         title = driver.title
         driver.close()
         typer.echo(f"✓ closed: {title}")
+
+
+# ---------------------------------------------------------------------------
+# Design inspection
+# ---------------------------------------------------------------------------
+
+@app.command(name="styles")
+def cmd_styles(
+    selector: Optional[str] = typer.Argument(None, help="CSS selector (default: body)."),
+):
+    """Extract computed styles and CSS variables from the page."""
+    with browser(mode=_MODE) as driver:
+        data = extract_styles(driver, selector)
+
+        typer.echo(f"[{data['element']}]")
+        typer.echo(driver.current_url)
+
+        if data["styles"]:
+            typer.echo("\n── computed styles ──")
+            for k, v in data["styles"].items():
+                typer.echo(f"  {k:<28} {v}")
+
+        if data["cssVars"]:
+            typer.echo(f"\n── css variables ({len(data['cssVars'])}) ──")
+            for k, v in list(data["cssVars"].items())[:60]:
+                typer.echo(f"  {k:<40} {v}")
+
+        if data["colors"]:
+            typer.echo(f"\n── colors on page ({len(data['colors'])}) ──")
+            for c in data["colors"]:
+                typer.echo(f"  {c}")
+
+
+@app.command(name="assets")
+def cmd_assets():
+    """Extract all assets from the page: images, fonts, stylesheets, background images."""
+    with browser(mode=_MODE) as driver:
+        data = extract_assets(driver)
+
+        typer.echo(driver.current_url)
+
+        typer.echo(f"\n── images ({len(data['images'])}) ──")
+        for img in data["images"][:30]:
+            dim = f"{img['width']}×{img['height']}" if img["width"] else "?"
+            alt = f' "{img["alt"]}"' if img["alt"] else ""
+            typer.echo(f"  {dim:<12} {img['src']}{alt}")
+
+        typer.echo(f"\n── font families ({len(data['fontFamilies'])}) ──")
+        for f in data["fontFamilies"]:
+            typer.echo(f"  {f}")
+
+        if data["fonts"]:
+            typer.echo(f"\n── loaded fonts ({len(data['fonts'])}) ──")
+            for f in data["fonts"]:
+                typer.echo(f"  {f['family']:<30} weight={f['weight']} style={f['style']} [{f['status']}]")
+
+        if data["stylesheets"]:
+            typer.echo(f"\n── stylesheets ({len(data['stylesheets'])}) ──")
+            for s in data["stylesheets"]:
+                typer.echo(f"  {s}")
+
+        if data["favicon"]:
+            typer.echo(f"\n── favicon ──\n  {data['favicon']}")
+
+        if data["backgroundImages"]:
+            typer.echo(f"\n── background images ({len(data['backgroundImages'])}) ──")
+            for b in data["backgroundImages"]:
+                typer.echo(f"  {b}")
+
+        if data["inlineSvgs"]:
+            typer.echo(f"\n── inline svgs ({len(data['inlineSvgs'])}) ──")
+            for s in data["inlineSvgs"]:
+                typer.echo(f"  {s}")
+
+
+@app.command(name="fullpage")
+def cmd_fullpage(
+    path: str = typer.Argument("/tmp/foxpilot-full.png", help="Output path."),
+):
+    """Take a full-page screenshot (captures entire scroll height)."""
+    with browser(mode=_MODE) as driver:
+        out, size_kb = fullpage_screenshot(driver, path)
+        typer.echo(f"✓ fullpage screenshot: {out} ({size_kb:.0f}KB)")
+        typer.echo(f"  title: {driver.title}")
+        typer.echo(f"  url: {driver.current_url}")
 
 
 # ---------------------------------------------------------------------------

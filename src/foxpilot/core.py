@@ -1,12 +1,9 @@
 """foxpilot.core — browser connection and shared automation logic."""
 
-import json
-import urllib.request
 from contextlib import contextmanager
 from typing import Optional
 
 MARIONETTE_PORT = 2828
-REMOTE_DEBUG_PORT = 9222
 
 
 # ---------------------------------------------------------------------------
@@ -83,53 +80,175 @@ def browser(mode: str = "headless"):
 
 
 # ---------------------------------------------------------------------------
-# Tab listing — uses Firefox remote debug HTTP (port 9222), not geckodriver
-# This is the only way to list ALL Zen tabs; geckodriver --connect-existing
-# only exposes the single window it attaches to.
+# Tab listing — uses Marionette via geckodriver (window_handles API)
 # ---------------------------------------------------------------------------
 
-def list_tabs(port: int = REMOTE_DEBUG_PORT) -> list[dict]:
-    """List all open tabs via Firefox remote debugging HTTP endpoint."""
+def list_tabs() -> list[dict]:
+    """List all open tabs via Marionette/geckodriver window handles."""
+    driver = _get_driver_zen()
     try:
-        with urllib.request.urlopen(
-            f"http://localhost:{port}/json", timeout=3
-        ) as resp:
-            data = json.loads(resp.read())
-        return [t for t in data if t.get("type") == "tab"]
-    except Exception as e:
-        raise RuntimeError(
-            f"Can't reach Firefox remote debug on port {port}. "
-            f"Is Zen running with --remote-debugging-port={port}? Error: {e}"
-        ) from e
+        try:
+            active_handle = driver.current_window_handle
+        except Exception:
+            active_handle = None
 
+        tabs = []
+        for handle in driver.window_handles:
+            try:
+                driver.switch_to.window(handle)
+                tabs.append({
+                    "id": handle,
+                    "title": driver.title,
+                    "url": driver.current_url,
+                    "active": handle == active_handle,
+                })
+            except Exception:
+                continue
 
-def activate_tab(tab_id: str, port: int = REMOTE_DEBUG_PORT) -> None:
-    """Activate a tab in the browser UI by its debugger ID."""
-    try:
-        req = urllib.request.Request(
-            f"http://localhost:{port}/json/activate/{tab_id}",
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=3):
+        # Restore original window
+        if active_handle:
+            try:
+                driver.switch_to.window(active_handle)
+            except Exception:
+                pass
+
+        return tabs
+    finally:
+        try:
+            driver.quit()
+        except Exception:
             pass
-    except Exception as e:
-        raise RuntimeError(f"Can't activate tab {tab_id}: {e}") from e
 
 
-def get_active_url(port: int = REMOTE_DEBUG_PORT) -> str:
-    """Return URL of the currently active tab via remote debug."""
+def activate_tab(tab_id: str) -> None:
+    """Switch to a tab by its Selenium window handle."""
+    driver = _get_driver_zen()
     try:
-        with urllib.request.urlopen(
-            f"http://localhost:{port}/json", timeout=3
-        ) as resp:
-            data = json.loads(resp.read())
-        # The active tab is usually the first one that isn't a background page
-        tabs = [t for t in data if t.get("type") == "tab"]
-        if tabs:
-            return tabs[0].get("url", "")
-    except Exception:
-        pass
-    return ""
+        driver.switch_to.window(tab_id)
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Design inspection
+# ---------------------------------------------------------------------------
+
+def extract_styles(driver, selector: Optional[str] = None) -> dict:
+    """Extract computed styles and CSS custom properties from the page."""
+    return driver.execute_script("""
+        const sel = arguments[0];
+        const el = sel ? (document.querySelector(sel) || document.body) : document.body;
+        const cs = getComputedStyle(el);
+        const PROPS = [
+            'color', 'background-color', 'font-family', 'font-size', 'font-weight',
+            'line-height', 'letter-spacing', 'text-transform', 'border-radius',
+            'box-shadow', 'padding', 'margin', 'gap', 'display', 'border',
+            'border-color', 'opacity', 'flex-direction', 'grid-template-columns'
+        ];
+        const styles = {};
+        PROPS.forEach(p => {
+            const v = cs.getPropertyValue(p);
+            if (v && v !== 'none' && v !== 'normal' && v !== 'auto'
+                && v !== '0px' && v !== 'rgba(0, 0, 0, 0)' && v !== '')
+                styles[p] = v;
+        });
+
+        const cssVars = {};
+        try {
+            [...document.styleSheets].forEach(sheet => {
+                try {
+                    [...sheet.cssRules].forEach(rule => {
+                        if (rule.selectorText === ':root') {
+                            for (let i = 0; i < rule.style.length; i++) {
+                                const name = rule.style[i];
+                                if (name.startsWith('--'))
+                                    cssVars[name] = rule.style.getPropertyValue(name).trim();
+                            }
+                        }
+                    });
+                } catch(e) {}
+            });
+        } catch(e) {}
+
+        const colors = new Set();
+        [...document.querySelectorAll('*')].slice(0, 300).forEach(e => {
+            const s = getComputedStyle(e);
+            ['color', 'background-color', 'border-color'].forEach(p => {
+                const v = s.getPropertyValue(p);
+                if (v && v !== 'rgba(0, 0, 0, 0)') colors.add(v);
+            });
+        });
+
+        return { element: sel || 'body', styles, cssVars, colors: [...colors].slice(0, 40) };
+    """, selector)
+
+
+def extract_assets(driver) -> dict:
+    """Extract images, fonts, stylesheets, and background images from the page."""
+    return driver.execute_script("""
+        const images = [...document.images]
+            .map(i => ({ src: i.src, alt: i.alt || '', width: i.naturalWidth, height: i.naturalHeight }))
+            .filter(i => i.src && !i.src.startsWith('data:'));
+
+        const fonts = [];
+        try {
+            [...document.fonts].forEach(f => {
+                fonts.push({ family: f.family, style: f.style, weight: f.weight, status: f.status });
+            });
+        } catch(e) {}
+
+        const families = new Set();
+        [...document.querySelectorAll('*')].slice(0, 400).forEach(e => {
+            const f = getComputedStyle(e).fontFamily;
+            if (f) families.add(f);
+        });
+
+        const stylesheets = [...document.styleSheets].map(s => s.href).filter(Boolean);
+
+        const faviconEl = document.querySelector('link[rel~="icon"]');
+        const favicon = faviconEl ? faviconEl.href : '';
+
+        const bgImages = new Set();
+        [...document.querySelectorAll('*')].slice(0, 400).forEach(e => {
+            const bg = getComputedStyle(e).backgroundImage;
+            if (bg && bg !== 'none' && bg.includes('url(')) {
+                const m = bg.match(/url\\(["']?([^"')]+)["']?\\)/);
+                if (m && !m[1].startsWith('data:')) bgImages.add(m[1]);
+            }
+        });
+
+        const svgIds = [...document.querySelectorAll('svg[id], svg[class]')]
+            .map(s => s.id || s.getAttribute('class') || 'svg').slice(0, 20);
+
+        return {
+            images,
+            fonts,
+            fontFamilies: [...families].slice(0, 20),
+            stylesheets,
+            favicon,
+            backgroundImages: [...bgImages].slice(0, 30),
+            inlineSvgs: svgIds,
+        };
+    """)
+
+
+def fullpage_screenshot(driver, path: str) -> tuple[str, float]:
+    """Take a full-page screenshot using Firefox's native API, falling back to resize."""
+    from pathlib import Path
+    out = Path(path)
+    try:
+        driver.get_full_page_screenshot_as_file(str(out))
+    except AttributeError:
+        orig = driver.get_window_size()
+        total_h = driver.execute_script("return document.documentElement.scrollHeight")
+        driver.set_window_size(orig["width"], min(total_h, 16384))
+        driver.save_screenshot(str(out))
+        driver.set_window_size(orig["width"], orig["height"])
+    size_kb = out.stat().st_size / 1024
+    return str(out), size_kb
 
 
 # ---------------------------------------------------------------------------

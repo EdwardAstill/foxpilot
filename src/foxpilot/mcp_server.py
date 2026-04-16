@@ -25,17 +25,17 @@ from foxpilot.core import (
     activate_tab,
     browser,
     describe_element,
+    extract_assets,
+    extract_styles,
     feedback,
     find_element,
+    fullpage_screenshot,
     list_tabs,
     read_page,
 )
 from foxpilot.search import format_results, search_duckduckgo
 
-mcp = FastMCP(
-    "foxpilot",
-    description="Firefox browser automation. Use mode='zen' to operate on the user's running Zen browser with their existing sessions and cookies. Use mode='headless' (default) for independent web research.",
-)
+mcp = FastMCP("foxpilot")
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ mcp = FastMCP(
 @mcp.tool()
 def tabs() -> str:
     """List all open tabs in the user's Zen browser.
-    Requires Zen running with --remote-debugging-port=9222.
+    Requires Zen running with --marionette.
     """
     try:
         tab_list = list_tabs()
@@ -55,16 +55,9 @@ def tabs() -> str:
     if not tab_list:
         return "(no tabs found)"
 
-    active_url = ""
-    try:
-        with browser(mode="zen") as driver:
-            active_url = driver.current_url
-    except Exception:
-        pass
-
     lines = []
     for i, tab in enumerate(tab_list):
-        marker = ">" if tab.get("url") == active_url else " "
+        marker = ">" if tab.get("active") else " "
         lines.append(f"{marker}[{i}] {tab.get('title', '(no title)')}")
         lines.append(f"     {tab.get('url', '')}")
     return "\n".join(lines)
@@ -446,6 +439,111 @@ def close_tab(index: int = -1, mode: str = "headless") -> str:
         title = driver.title
         driver.close()
         return f"✓ closed: {title}"
+
+
+# ---------------------------------------------------------------------------
+# Design inspection
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def styles(selector: str = "", mode: str = "zen") -> str:
+    """Extract computed styles and CSS custom properties from the page.
+
+    Args:
+        selector: CSS selector of element to inspect (default: body).
+        mode: "headless" or "zen".
+
+    Returns computed styles, CSS variables, and colors found on the page.
+    """
+    with browser(mode=mode) as driver:
+        data = extract_styles(driver, selector or None)
+        lines = [f"[{data['element']}]", driver.current_url]
+
+        if data["styles"]:
+            lines.append("\n── computed styles ──")
+            for k, v in data["styles"].items():
+                lines.append(f"  {k:<28} {v}")
+
+        if data["cssVars"]:
+            lines.append(f"\n── css variables ({len(data['cssVars'])}) ──")
+            for k, v in list(data["cssVars"].items())[:60]:
+                lines.append(f"  {k:<40} {v}")
+
+        if data["colors"]:
+            lines.append(f"\n── colors on page ({len(data['colors'])}) ──")
+            for c in data["colors"]:
+                lines.append(f"  {c}")
+
+        return "\n".join(lines)
+
+
+@mcp.tool()
+def assets(mode: str = "zen") -> str:
+    """Extract all assets from the page: images, fonts, stylesheets, background images.
+
+    Args:
+        mode: "headless" or "zen".
+
+    Returns a structured list of all assets found on the current page.
+    """
+    with browser(mode=mode) as driver:
+        data = extract_assets(driver)
+        lines = [driver.current_url]
+
+        lines.append(f"\n── images ({len(data['images'])}) ──")
+        for img in data["images"][:30]:
+            dim = f"{img['width']}×{img['height']}" if img["width"] else "?"
+            alt = f' "{img["alt"]}"' if img["alt"] else ""
+            lines.append(f"  {dim:<12} {img['src']}{alt}")
+
+        lines.append(f"\n── font families ({len(data['fontFamilies'])}) ──")
+        for f in data["fontFamilies"]:
+            lines.append(f"  {f}")
+
+        if data["fonts"]:
+            lines.append(f"\n── loaded fonts ({len(data['fonts'])}) ──")
+            for f in data["fonts"]:
+                lines.append(f"  {f['family']:<30} weight={f['weight']} style={f['style']} [{f['status']}]")
+
+        if data["stylesheets"]:
+            lines.append(f"\n── stylesheets ({len(data['stylesheets'])}) ──")
+            for s in data["stylesheets"]:
+                lines.append(f"  {s}")
+
+        if data["favicon"]:
+            lines.append(f"\n── favicon ──\n  {data['favicon']}")
+
+        if data["backgroundImages"]:
+            lines.append(f"\n── background images ({len(data['backgroundImages'])}) ──")
+            for b in data["backgroundImages"]:
+                lines.append(f"  {b}")
+
+        if data["inlineSvgs"]:
+            lines.append(f"\n── inline svgs ({len(data['inlineSvgs'])}) ──")
+            for s in data["inlineSvgs"]:
+                lines.append(f"  {s}")
+
+        return "\n".join(lines)
+
+
+@mcp.tool()
+def fullpage(path: str = "/tmp/foxpilot-full.png", mode: str = "zen") -> str:
+    """Take a full-page screenshot capturing the entire scroll height.
+
+    Args:
+        path: Output file path (default: /tmp/foxpilot-full.png).
+        mode: "headless" or "zen".
+
+    Returns the saved path so you can read it with the Read tool.
+    """
+    with browser(mode=mode) as driver:
+        out, size_kb = fullpage_screenshot(driver, path)
+        return (
+            f"✓ fullpage screenshot: {out} ({size_kb:.0f}KB)\n"
+            f"title: {driver.title}\n"
+            f"url: {driver.current_url}\n"
+            f"(use Read tool on the path to view it)"
+        )
 
 
 # ---------------------------------------------------------------------------
