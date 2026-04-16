@@ -138,11 +138,27 @@ def browser(mode: str = "headless"):
 
 
 # ---------------------------------------------------------------------------
-# Tab listing — uses Marionette via geckodriver (window_handles API)
+# Tab listing — no focus stealing via raw geckodriver HTTP API
 # ---------------------------------------------------------------------------
 
+def _switch_window_no_focus(driver, handle: str) -> None:
+    """Switch geckodriver context to a window without raising it.
+
+    Selenium's switch_to.window() always sends focus=true to Marionette which
+    raises the target window. The geckodriver HTTP API accepts focus=false so
+    we POST directly, bypassing Selenium.
+    """
+    import json as _json
+    import urllib.request as _ureq
+    url = f"{driver.service.service_url}/session/{driver.session_id}/window"
+    body = _json.dumps({"handle": handle, "focus": False}).encode()
+    req = _ureq.Request(url, data=body, method="POST",
+                        headers={"Content-Type": "application/json"})
+    _ureq.urlopen(req, timeout=5)
+
+
 def list_tabs() -> list[dict]:
-    """List all open tabs via Marionette/geckodriver window handles."""
+    """List all open tabs without stealing window focus."""
     driver = _get_driver_zen()
     try:
         try:
@@ -153,7 +169,7 @@ def list_tabs() -> list[dict]:
         tabs = []
         for handle in driver.window_handles:
             try:
-                driver.switch_to.window(handle)
+                _switch_window_no_focus(driver, handle)
                 tabs.append({
                     "id": handle,
                     "title": driver.title,
@@ -163,10 +179,9 @@ def list_tabs() -> list[dict]:
             except Exception:
                 continue
 
-        # Restore original window
         if active_handle:
             try:
-                driver.switch_to.window(active_handle)
+                _switch_window_no_focus(driver, active_handle)
             except Exception:
                 pass
 
@@ -179,7 +194,7 @@ def list_tabs() -> list[dict]:
 
 
 def activate_tab(tab_id: str) -> None:
-    """Switch to a tab by its Selenium window handle."""
+    """Switch to a tab by window handle — intentionally raises the window."""
     driver = _get_driver_zen()
     try:
         driver.switch_to.window(tab_id)
@@ -191,11 +206,10 @@ def activate_tab(tab_id: str) -> None:
 
 
 def switch_tab(target: str) -> dict:
-    """List tabs and switch to one by index or URL/title substring — single session.
+    """Find and switch to a tab by index or URL/title substring.
 
-    Using separate list_tabs() + activate_tab() calls fails because window
-    handles are session-scoped and don't transfer between geckodriver sessions.
-    This function does both in one session.
+    Listing uses focus=false so iterating handles doesn't steal your window.
+    The final switch uses focus=true since the user explicitly requested it.
     """
     driver = _get_driver_zen()
     try:
@@ -207,7 +221,7 @@ def switch_tab(target: str) -> dict:
         tabs = []
         for handle in driver.window_handles:
             try:
-                driver.switch_to.window(handle)
+                _switch_window_no_focus(driver, handle)
                 tabs.append({
                     "id": handle,
                     "title": driver.title,
@@ -216,7 +230,6 @@ def switch_tab(target: str) -> dict:
             except Exception:
                 continue
 
-        # Find target
         target_tab = None
         try:
             idx = int(target)
@@ -241,6 +254,8 @@ def switch_tab(target: str) -> dict:
             driver.quit()
         except Exception:
             pass
+
+
 
 
 # ---------------------------------------------------------------------------
