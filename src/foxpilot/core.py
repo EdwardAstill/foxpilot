@@ -67,11 +67,11 @@ def _get_driver_zen():
 
     if not _marionette_listening():
         if _zen_running():
-            raise RuntimeError(
-                "Zen is running but Marionette is not enabled.\n"
-                "Restart Zen with: zen-browser --marionette"
-            )
-        # Zen not running — launch it
+            # Zen running without Marionette — kill and relaunch with it
+            # Zen saves session on exit and restores tabs on next launch
+            import subprocess
+            subprocess.run(["pkill", "zen-bin"], check=False)
+            time.sleep(2)
         _launch_zen_with_marionette()
         time.sleep(1)  # give geckodriver a moment after port opens
 
