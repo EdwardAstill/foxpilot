@@ -26,17 +26,44 @@ Requires:
 | `headless` | Launches a fresh, ephemeral Firefox instance. No existing session. Default. |
 | `zen` | Connects to your running Zen browser via Marionette (port 2828). Uses your cookies and logins. |
 
-### Starting Zen with remote access
+### Setting up Zen mode
 
-Zen must be launched with the `--marionette` flag:
+foxpilot connects to Zen via the Marionette protocol on port 2828. Zen must have Marionette enabled when it launches — it does not enable it at runtime.
+
+**Important:** the `zen-browser` CLI wrapper does not automatically include launch flags from the `.desktop` entry. You must either always launch with `--marionette`, or create a persistent wrapper so it's always included.
+
+#### One-time setup (recommended)
+
+Create a user-level wrapper at `~/.local/bin/zen-browser` that bakes in the flag:
 
 ```bash
-zen-browser --marionette
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/zen-browser << 'EOF'
+#!/bin/bash
+exec /opt/zen-browser-bin/zen-bin --marionette "$@"
+EOF
+chmod +x ~/.local/bin/zen-browser
 ```
 
-- `--marionette` — enables the WebDriver control connection on port 2828
+Make sure `~/.local/bin` is before `/usr/bin` on your `PATH`. After this, launching Zen any way — terminal, app menu, or file association — will always have Marionette enabled.
 
-Tab listing and switching use Marionette directly — no `--remote-debugging-port` needed.
+#### Manual launch (no wrapper)
+
+If you don't want the wrapper, launch Zen explicitly before using foxpilot:
+
+```bash
+zen-browser --marionette &
+```
+
+Then use `foxpilot --zen <command>` as normal.
+
+#### Verify it's working
+
+```bash
+foxpilot --zen tabs
+```
+
+If you see your open tabs, Marionette is connected. If you see `Can't connect to Zen on Marionette port 2828`, Zen wasn't launched with `--marionette`.
 
 ---
 
