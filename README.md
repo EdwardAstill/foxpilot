@@ -26,44 +26,23 @@ Requires:
 | `headless` | Launches a fresh, ephemeral Firefox instance. No existing session. Default. |
 | `zen` | Connects to your running Zen browser via Marionette (port 2828). Uses your cookies and logins. |
 
-### Setting up Zen mode
+### Zen mode — how it works
 
-foxpilot connects to Zen via the Marionette protocol on port 2828. Zen must have Marionette enabled when it launches — it does not enable it at runtime.
+foxpilot connects to Zen via the [Marionette](https://firefox-source-docs.mozilla.org/testing/marionette/) WebDriver protocol on port 2828. Marionette must be active when Zen launches — it cannot be enabled on a running instance.
 
-**Important:** the `zen-browser` CLI wrapper does not automatically include launch flags from the `.desktop` entry. You must either always launch with `--marionette`, or create a persistent wrapper so it's always included.
+foxpilot handles this automatically. When you run any `--zen` command:
 
-#### One-time setup (recommended)
+1. **Marionette already listening** → connects immediately, no disruption
+2. **Zen running without Marionette** → kills Zen, relaunches it with `--marionette`, reconnects. Zen's built-in session restore brings your tabs back.
+3. **Zen not running at all** → launches Zen with `--marionette` in the background, waits for it to start, then connects
 
-Create a user-level wrapper at `~/.local/bin/zen-browser` that bakes in the flag:
+In practice this means `foxpilot --zen <anything>` just works — no manual setup, no wrapper scripts.
 
-```bash
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/zen-browser << 'EOF'
-#!/bin/bash
-exec /opt/zen-browser-bin/zen-bin --marionette "$@"
-EOF
-chmod +x ~/.local/bin/zen-browser
-```
+### Why `zen-browser --marionette` and not just `zen-browser`
 
-Make sure `~/.local/bin` is before `/usr/bin` on your `PATH`. After this, launching Zen any way — terminal, app menu, or file association — will always have Marionette enabled.
+The `zen-browser` CLI script is a thin wrapper: `exec /opt/zen-browser-bin/zen-bin "$@"`. It does not read or apply flags from the `.desktop` entry. Marionette must be passed explicitly on the command line at launch time — Firefox does not support enabling it on a running process.
 
-#### Manual launch (no wrapper)
-
-If you don't want the wrapper, launch Zen explicitly before using foxpilot:
-
-```bash
-zen-browser --marionette &
-```
-
-Then use `foxpilot --zen <command>` as normal.
-
-#### Verify it's working
-
-```bash
-foxpilot --zen tabs
-```
-
-If you see your open tabs, Marionette is connected. If you see `Can't connect to Zen on Marionette port 2828`, Zen wasn't launched with `--marionette`.
+foxpilot handles this by detecting the port state and managing the relaunch itself, so you never need to think about it.
 
 ---
 
@@ -578,11 +557,33 @@ Return a formatted string combining an action message, current URL, title, and v
 
 ---
 
+## Known limitations
+
+### `read` is stateless in headless mode
+
+Each CLI invocation opens a new browser process. `foxpilot go https://example.com` navigates, returns content, and exits. A subsequent `foxpilot read` opens a fresh Firefox on `about:blank` — there is no shared session between calls.
+
+**In headless mode:** use `go`, which already returns visible page content inline via the `feedback()` helper. `read` as a standalone is not useful after `go`.
+
+**In zen mode:** this is not a problem. Both commands connect to the same running Zen instance, so `foxpilot --zen go <url>` followed by `foxpilot --zen read` works correctly.
+
+Tracked in [#1](https://github.com/EdwardAstill/foxpilot/issues/1). A `--url` flag on `read` would fix the headless case.
+
+### Tab titles missing on fresh Zen session
+
+After foxpilot auto-restarts Zen, `foxpilot --zen tabs` may show blank titles for tabs that haven't finished loading yet. Wait a few seconds and run again — titles populate as Zen's session restore completes.
+
+### Zen session restore timing
+
+When foxpilot kills and relaunches Zen to enable Marionette, Zen's session restore runs asynchronously. The relaunch is considered ready when the Marionette port opens (up to 10s), but tabs may still be loading. Commands issued immediately after a cold restart may land on `about:blank` rather than the restored tab.
+
+---
+
 ## Architecture
 
 ```
 foxpilot/
-├── core.py         Browser connection, tab listing, element finding, page reading
+├── core.py         Browser connection, Zen auto-launch, tab listing, element finding, page reading
 ├── cli.py          Typer CLI (foxpilot command)
 ├── mcp_server.py   FastMCP server (foxpilot mcp)
 ├── search.py       DuckDuckGo search via HTML interface
