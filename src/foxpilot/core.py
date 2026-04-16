@@ -10,11 +10,70 @@ MARIONETTE_PORT = 2828
 # Connection helpers
 # ---------------------------------------------------------------------------
 
+ZEN_BINARY = "zen-browser"
+
+
+def _marionette_listening() -> bool:
+    """Return True if something is accepting connections on the Marionette port."""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", MARIONETTE_PORT), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def _zen_running() -> bool:
+    """Return True if a zen-bin process exists."""
+    import subprocess
+    result = subprocess.run(["pgrep", "-f", "zen-bin"], capture_output=True)
+    return result.returncode == 0
+
+
+def _launch_zen_with_marionette() -> None:
+    """Launch Zen in the background with --marionette and wait for port."""
+    import subprocess
+    import time
+    import os
+
+    env = os.environ.copy()
+    if "DISPLAY" not in env:
+        env["DISPLAY"] = ":0"
+
+    subprocess.Popen(
+        [ZEN_BINARY, "--marionette"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    # Wait up to 10s for Marionette to come up
+    for _ in range(20):
+        time.sleep(0.5)
+        if _marionette_listening():
+            return
+    raise RuntimeError("Launched Zen but Marionette port never opened.")
+
+
 def _get_driver_zen():
-    """Connect to running Zen via geckodriver --connect-existing."""
+    """Connect to running Zen via geckodriver --connect-existing.
+
+    If Zen is not running, launches it automatically with --marionette.
+    If Zen is running but Marionette is not listening, raises a clear error.
+    """
+    import time
     from selenium import webdriver
     from selenium.webdriver.firefox.options import Options
     from selenium.webdriver.firefox.service import Service
+
+    if not _marionette_listening():
+        if _zen_running():
+            raise RuntimeError(
+                "Zen is running but Marionette is not enabled.\n"
+                "Restart Zen with: zen-browser --marionette"
+            )
+        # Zen not running — launch it
+        _launch_zen_with_marionette()
+        time.sleep(1)  # give geckodriver a moment after port opens
 
     opts = Options()
     service = Service(
@@ -27,8 +86,7 @@ def _get_driver_zen():
         driver = webdriver.Firefox(options=opts, service=service)
     except Exception as e:
         raise RuntimeError(
-            f"Can't connect to Zen on Marionette port {MARIONETTE_PORT}.\n"
-            f"Is Zen running with --marionette? Error: {e}"
+            f"Can't connect to Zen on Marionette port {MARIONETTE_PORT}. Error: {e}"
         ) from e
 
     # Suppress webdriver flag to reduce bot detection
