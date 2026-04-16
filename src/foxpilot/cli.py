@@ -13,7 +13,6 @@ from typing import Optional
 import typer
 
 from foxpilot.core import (
-    activate_tab,
     browser,
     describe_element,
     extract_assets,
@@ -23,6 +22,7 @@ from foxpilot.core import (
     fullpage_screenshot,
     list_tabs,
     read_page,
+    switch_tab,
 )
 
 app = typer.Typer(
@@ -354,35 +354,11 @@ def cmd_tab(
 ):
     """Switch to a tab by index or substring (zen mode — operates on real browser)."""
     try:
-        tab_list = list_tabs()
+        t = switch_tab(target)
+        typer.echo(f"✓ switched to {t.get('title', '') or t.get('url', '')}")
     except RuntimeError as e:
         typer.echo(f"✗ {e}", err=True)
         raise typer.Exit(1)
-
-    # Try numeric index first
-    try:
-        idx = int(target)
-        if 0 <= idx < len(tab_list):
-            t = tab_list[idx]
-            activate_tab(t["id"])
-            typer.echo(f"✓ switched to [{idx}] {t.get('title', '')}")
-            return
-        else:
-            typer.echo(f"✗ index {idx} out of range (0-{len(tab_list)-1})")
-            raise typer.Exit(1)
-    except ValueError:
-        pass
-
-    # Search by URL/title substring
-    tl = target.lower()
-    for i, t in enumerate(tab_list):
-        if tl in t.get("title", "").lower() or tl in t.get("url", "").lower():
-            activate_tab(t["id"])
-            typer.echo(f"✓ switched to [{i}] {t.get('title', '')} (matched '{target}')")
-            return
-
-    typer.echo(f"✗ no tab matching '{target}'")
-    raise typer.Exit(1)
 
 
 @app.command(name="new-tab")

@@ -22,7 +22,6 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from foxpilot.core import (
-    activate_tab,
     browser,
     describe_element,
     extract_assets,
@@ -32,6 +31,7 @@ from foxpilot.core import (
     fullpage_screenshot,
     list_tabs,
     read_page,
+    switch_tab,
 )
 from foxpilot.search import format_results, search_duckduckgo
 
@@ -380,27 +380,10 @@ def tab_switch(target: str) -> str:
         target: Tab index (number) or URL/title substring to match.
     """
     try:
-        tab_list = list_tabs()
+        t = switch_tab(target)
+        return f"✓ switched to {t.get('title', '') or t.get('url', '')}"
     except RuntimeError as e:
         return f"✗ {e}"
-
-    try:
-        idx = int(target)
-        if 0 <= idx < len(tab_list):
-            t = tab_list[idx]
-            activate_tab(t["id"])
-            return f"✓ switched to [{idx}] {t.get('title', '')}"
-        return f"✗ index {idx} out of range (0-{len(tab_list)-1})"
-    except ValueError:
-        pass
-
-    tl = target.lower()
-    for i, t in enumerate(tab_list):
-        if tl in t.get("title", "").lower() or tl in t.get("url", "").lower():
-            activate_tab(t["id"])
-            return f"✓ switched to [{i}] {t.get('title', '')} (matched '{target}')"
-
-    return f"✗ no tab matching '{target}'"
 
 
 @mcp.tool()

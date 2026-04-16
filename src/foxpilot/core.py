@@ -190,6 +190,59 @@ def activate_tab(tab_id: str) -> None:
             pass
 
 
+def switch_tab(target: str) -> dict:
+    """List tabs and switch to one by index or URL/title substring — single session.
+
+    Using separate list_tabs() + activate_tab() calls fails because window
+    handles are session-scoped and don't transfer between geckodriver sessions.
+    This function does both in one session.
+    """
+    driver = _get_driver_zen()
+    try:
+        try:
+            active_handle = driver.current_window_handle
+        except Exception:
+            active_handle = None
+
+        tabs = []
+        for handle in driver.window_handles:
+            try:
+                driver.switch_to.window(handle)
+                tabs.append({
+                    "id": handle,
+                    "title": driver.title,
+                    "url": driver.current_url,
+                })
+            except Exception:
+                continue
+
+        # Find target
+        target_tab = None
+        try:
+            idx = int(target)
+            if 0 <= idx < len(tabs):
+                target_tab = tabs[idx]
+            else:
+                raise RuntimeError(f"Index {idx} out of range (0–{len(tabs) - 1})")
+        except ValueError:
+            tl = target.lower()
+            for tab in tabs:
+                if tl in tab.get("title", "").lower() or tl in tab.get("url", "").lower():
+                    target_tab = tab
+                    break
+
+        if not target_tab:
+            raise RuntimeError(f"No tab matching '{target}'")
+
+        driver.switch_to.window(target_tab["id"])
+        return target_tab
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Design inspection
 # ---------------------------------------------------------------------------
