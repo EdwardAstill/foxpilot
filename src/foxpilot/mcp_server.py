@@ -23,6 +23,7 @@ from mcp.server.fastmcp import FastMCP
 
 from foxpilot.core import (
     browser,
+    burst_screenshots,
     describe_element,
     extract_assets,
     extract_styles,
@@ -31,6 +32,7 @@ from foxpilot.core import (
     fullpage_screenshot,
     list_tabs,
     read_page,
+    record_video,
     switch_tab,
 )
 from foxpilot.search import format_results, search_duckduckgo
@@ -526,6 +528,92 @@ def fullpage(path: str = "/tmp/foxpilot-full.png", mode: str = "zen") -> str:
             f"title: {driver.title}\n"
             f"url: {driver.current_url}\n"
             f"(use Read tool on the path to view it)"
+        )
+
+
+@mcp.tool()
+def burst(
+    target_url: str = "",
+    count: int = 10,
+    interval_ms: int = 500,
+    out_dir: str = "/tmp/foxpilot-burst",
+    warmup_s: float = 1.0,
+    mode: str = "headless",
+) -> str:
+    """Take a burst of N screenshots spaced `interval_ms` apart.
+
+    Produces PNG frames the agent's Read tool can view directly — use this
+    when you want an agent-readable time-lapse. Prefer over `record` if the
+    frames need to go to an agent: Read tool doesn't eat video.
+
+    Args:
+        target_url: URL to navigate to first (empty to use current page).
+        count: Number of frames (default 10).
+        interval_ms: Milliseconds between frames (default 500).
+        out_dir: Output directory for frames (default /tmp/foxpilot-burst).
+        warmup_s: Seconds to wait after navigate before first frame.
+        mode: "headless" or "zen".
+    """
+    with browser(mode=mode) as driver:
+        if target_url:
+            driver.get(target_url)
+            time.sleep(warmup_s)
+        paths = burst_screenshots(
+            driver, out_dir, count=count, interval_ms=interval_ms
+        )
+        return (
+            f"✓ burst: {len(paths)} frames in {out_dir}/\n"
+            f"first: {paths[0]}\n"
+            f"last:  {paths[-1]}\n"
+            f"title: {driver.title}\n"
+            f"url: {driver.current_url}\n"
+            f"(use Read tool on individual frame paths to view)"
+        )
+
+
+@mcp.tool()
+def record(
+    target_url: str = "",
+    duration_s: float = 5.0,
+    fps: int = 5,
+    out_path: str = "/tmp/foxpilot-clip.mp4",
+    warmup_s: float = 1.0,
+    keep_frames: bool = False,
+    mode: str = "headless",
+) -> str:
+    """Record a video clip by frame-bursting, then stitching with ffmpeg.
+
+    Agents CANNOT read video files — use `burst` instead if the frames need
+    to be readable. Call `record` only for human-debug clips.
+
+    Args:
+        target_url: URL to navigate to first (empty to use current page).
+        duration_s: Recording length in seconds (default 5).
+        fps: Frames per second (default 5).
+        out_path: Output video file (.mp4/.webm/.mkv/.gif).
+        warmup_s: Seconds to wait after navigate before recording.
+        keep_frames: If True, keep raw PNG frames alongside the video.
+        mode: "headless" or "zen".
+    """
+    with browser(mode=mode) as driver:
+        if target_url:
+            driver.get(target_url)
+            time.sleep(warmup_s)
+        try:
+            path, n = record_video(
+                driver,
+                out_path,
+                duration_s=duration_s,
+                fps=fps,
+                cleanup=not keep_frames,
+            )
+        except RuntimeError as e:
+            return f"✗ {e}"
+        return (
+            f"✓ recorded: {path} ({n} frames @ {fps}fps, {duration_s}s)\n"
+            f"title: {driver.title}\n"
+            f"url: {driver.current_url}\n"
+            f"(video is for human viewing — use `burst` for agent-readable frames)"
         )
 
 

@@ -378,6 +378,105 @@ def fullpage_screenshot(driver, path: str) -> tuple[str, float]:
 
 
 # ---------------------------------------------------------------------------
+# Frame burst + video recording
+# ---------------------------------------------------------------------------
+
+def burst_screenshots(
+    driver,
+    out_dir: str,
+    count: int = 10,
+    interval_ms: int = 500,
+    prefix: str = "frame",
+) -> list[str]:
+    """Take N screenshots spaced `interval_ms` milliseconds apart.
+
+    Produces zero-padded PNGs (frame-000.png, frame-001.png, ...) in out_dir.
+    Returns the list of file paths. The caller is responsible for driving the
+    page (scrolling, clicking, waiting for animations) before/between bursts —
+    this function just shoots frames as fast as the interval permits.
+    """
+    import time
+    from pathlib import Path
+
+    d = Path(out_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    pad = max(3, len(str(count - 1)))
+    paths: list[str] = []
+
+    for i in range(count):
+        p = d / f"{prefix}-{i:0{pad}d}.png"
+        driver.save_screenshot(str(p))
+        paths.append(str(p))
+        if i < count - 1:
+            time.sleep(interval_ms / 1000.0)
+
+    return paths
+
+
+def record_video(
+    driver,
+    out_path: str,
+    duration_s: float = 5.0,
+    fps: int = 5,
+    tmp_dir: Optional[str] = None,
+    cleanup: bool = True,
+) -> tuple[str, int]:
+    """Record a video clip by frame-bursting then stitching with ffmpeg.
+
+    fps × duration frames are captured at the requested cadence, then piped
+    through ffmpeg into the container inferred from out_path's extension
+    (.mp4, .webm, .mkv, .gif all work).
+
+    Returns (out_path, frame_count). Raises RuntimeError if ffmpeg is missing.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg not found on PATH; install it to use record.")
+
+    total_frames = max(1, int(round(duration_s * fps)))
+    interval_ms = int(1000 / max(1, fps))
+
+    tmp = Path(tmp_dir) if tmp_dir else Path(tempfile.mkdtemp(prefix="foxpilot-rec-"))
+    tmp.mkdir(parents=True, exist_ok=True)
+
+    try:
+        burst_screenshots(
+            driver,
+            str(tmp),
+            count=total_frames,
+            interval_ms=interval_ms,
+            prefix="f",
+        )
+
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        pattern = str(tmp / "f-%03d.png")
+        cmd = [
+            "ffmpeg", "-y",
+            "-framerate", str(fps),
+            "-i", pattern,
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-pix_fmt", "yuv420p",
+            str(out),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg failed (rc={result.returncode}): {result.stderr[-800:]}"
+            )
+        return str(out), total_frames
+    finally:
+        if cleanup:
+            import shutil as _shutil
+            _shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Element finding
 # ---------------------------------------------------------------------------
 

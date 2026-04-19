@@ -14,6 +14,7 @@ import typer
 
 from foxpilot.core import (
     browser,
+    burst_screenshots,
     describe_element,
     extract_assets,
     extract_styles,
@@ -22,6 +23,7 @@ from foxpilot.core import (
     fullpage_screenshot,
     list_tabs,
     read_page,
+    record_video,
     switch_tab,
 )
 
@@ -477,6 +479,62 @@ def cmd_fullpage(
         typer.echo(f"✓ fullpage screenshot: {out} ({size_kb:.0f}KB)")
         typer.echo(f"  title: {driver.title}")
         typer.echo(f"  url: {driver.current_url}")
+
+
+@app.command(name="burst")
+def cmd_burst(
+    target_url: Optional[str] = typer.Argument(None, help="URL to navigate to first (optional)."),
+    count: int = typer.Option(10, "--count", "-n", help="Number of frames to capture."),
+    interval: int = typer.Option(500, "--interval", "-i", help="Milliseconds between frames."),
+    out: str = typer.Option("/tmp/foxpilot-burst", "--out", "-o", help="Output directory."),
+    prefix: str = typer.Option("frame", "--prefix", help="Filename prefix."),
+    warmup: float = typer.Option(1.0, "--warmup", help="Seconds to wait after navigate."),
+):
+    """Take N screenshots spaced --interval ms apart.
+
+    Produces PNGs the agent's Read tool can view directly — unlike video.
+    Use this when you want an agent-readable time-lapse of a page.
+    """
+    with browser(mode=_MODE) as driver:
+        if target_url:
+            driver.get(target_url)
+            time.sleep(warmup)
+        paths = burst_screenshots(driver, out, count=count, interval_ms=interval, prefix=prefix)
+        typer.echo(f"✓ burst: {len(paths)} frames → {out}/")
+        typer.echo(f"  first: {paths[0]}")
+        typer.echo(f"  last:  {paths[-1]}")
+        typer.echo(f"  title: {driver.title}")
+        typer.echo(f"  url:   {driver.current_url}")
+
+
+@app.command(name="record")
+def cmd_record(
+    target_url: Optional[str] = typer.Argument(None, help="URL to navigate to first (optional)."),
+    duration: float = typer.Option(5.0, "--duration", "-d", help="Recording length in seconds."),
+    fps: int = typer.Option(5, "--fps", help="Frames per second."),
+    out: str = typer.Option("/tmp/foxpilot-clip.mp4", "--out", "-o", help="Output file (.mp4/.webm/.mkv/.gif)."),
+    warmup: float = typer.Option(1.0, "--warmup", help="Seconds to wait after navigate."),
+    keep_frames: bool = typer.Option(False, "--keep-frames", help="Keep the raw PNG frames."),
+):
+    """Record a video clip by frame-bursting, then stitching with ffmpeg.
+
+    NOTE: agents can't read video — use `burst` if the frames need to go to
+    an agent. `record` is for human-debug clips.
+    """
+    with browser(mode=_MODE) as driver:
+        if target_url:
+            driver.get(target_url)
+            time.sleep(warmup)
+        try:
+            path, n = record_video(
+                driver, out, duration_s=duration, fps=fps, cleanup=not keep_frames
+            )
+        except RuntimeError as e:
+            typer.echo(f"✗ {e}", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"✓ recorded: {path} ({n} frames @ {fps}fps, {duration}s)")
+        typer.echo(f"  title: {driver.title}")
+        typer.echo(f"  url:   {driver.current_url}")
 
 
 # ---------------------------------------------------------------------------

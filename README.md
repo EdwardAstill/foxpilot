@@ -372,6 +372,51 @@ foxpilot --zen fullpage /tmp/mysite-full.png
 
 Uses Firefox's native full-page screenshot API (`get_full_page_screenshot_as_file`). Falls back to resizing the viewport to `document.documentElement.scrollHeight` if the native API is unavailable. Maximum height is capped at 16384px to avoid memory issues.
 
+#### `burst [target_url] [--count N] [--interval MS] [--out DIR]`
+
+Take a burst of N screenshots spaced `--interval` milliseconds apart. Produces
+zero-padded PNG frames the agent's `Read` tool can view directly — use this
+when you want an agent-readable time-lapse of a page.
+
+```
+target_url     URL to navigate to first (optional; omit to burst the current page)
+--count / -n   Number of frames (default 10)
+--interval /-i Milliseconds between frames (default 500)
+--out / -o     Output directory (default /tmp/foxpilot-burst)
+--prefix       Filename prefix (default "frame")
+--warmup       Seconds to wait after navigate before first frame (default 1.0)
+```
+
+```bash
+foxpilot burst http://localhost:3000 --count 20 --interval 250
+foxpilot --zen burst --count 5 --interval 1000 --out /tmp/live-frames/
+```
+
+#### `record [target_url] [--duration S] [--fps N] [--out FILE]`
+
+Record a video clip by frame-bursting, then stitching the PNGs together with
+`ffmpeg`. Output container inferred from the extension (`.mp4`, `.webm`,
+`.mkv`, `.gif` all work).
+
+**NOTE:** agents can't read video files — use `burst` if the frames need to go
+to an agent. `record` is for human-debug clips.
+
+```
+target_url      URL to navigate to first (optional)
+--duration / -d Recording length in seconds (default 5)
+--fps           Frames per second (default 5)
+--out / -o      Output file (default /tmp/foxpilot-clip.mp4)
+--warmup        Seconds to wait after navigate (default 1.0)
+--keep-frames   Keep the raw PNG frames alongside the video
+```
+
+```bash
+foxpilot record http://localhost:3000 --duration 10 --fps 10 --out /tmp/demo.mp4
+foxpilot --zen record --duration 3 --fps 5 --out /tmp/session.webm
+```
+
+Requires `ffmpeg` on `PATH`.
+
 ---
 
 ### Design replication workflow
