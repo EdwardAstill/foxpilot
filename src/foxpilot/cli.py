@@ -1,10 +1,13 @@
 """foxpilot.cli — typer CLI.
 
 Usage:
-    foxpilot [--zen] <command> [args]
+    foxpilot [--zen | --visible | --headless-mode] <command> [args]
 
-Pass --zen to operate on the user's running Zen browser.
-Default is headless Firefox (ephemeral, no existing session).
+Default mode is **claude** — a dedicated Zen profile, hidden in a Hyprland
+special workspace so the agent can drive the browser without taking over
+the user's screen. Pass --visible to bring the window onto the active
+workspace for the duration of the run. Pass --zen to operate on the user's
+own running Zen instance instead.
 """
 
 import time
@@ -15,6 +18,10 @@ import typer
 from foxpilot.core import (
     browser,
     burst_screenshots,
+    claude_hide,
+    claude_show,
+    claude_status,
+    import_cookies,
     describe_element,
     extract_assets,
     extract_styles,
@@ -32,20 +39,43 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-# Global mode — set by --zen callback before subcommand runs
-_MODE = "headless"
+# Global mode — set by callback before subcommand runs
+_MODE = "claude"
+_VISIBLE = False
 
 
 @app.callback()
 def _global(
-    zen: bool = typer.Option(False, "--zen", "-z", help="Use user's running Zen browser."),
+    zen: bool = typer.Option(
+        False, "--zen", "-z",
+        help="Use user's running Zen browser (shares the user's tabs/cookies).",
+    ),
+    visible: bool = typer.Option(
+        False, "--visible", "-V",
+        help="Show the claude-mode browser window on the active workspace.",
+    ),
+    headless_mode: bool = typer.Option(
+        False, "--headless-mode",
+        help="Force ephemeral headless Firefox (no profile, no session).",
+    ),
 ):
-    global _MODE
-    _MODE = "zen" if zen else "headless"
+    global _MODE, _VISIBLE
+    if zen:
+        _MODE = "zen"
+    elif headless_mode:
+        _MODE = "headless"
+    else:
+        _MODE = "claude"
+    _VISIBLE = visible
 
 
 def _mode(override: str = "") -> str:
     return override if override else _MODE
+
+
+# Helper so every command can pass the right kwargs through to browser()
+def _browser():
+    return browser(mode=_MODE, visible=_VISIBLE)
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +109,7 @@ def cmd_read(
 ):
     """Extract main content from current page."""
     max_chars = 50000 if full else 3000
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         if tab:
             _switch_tab(driver, tab)
         text = read_page(driver, selector, max_chars)
@@ -100,7 +130,7 @@ def cmd_screenshot(
     from selenium.webdriver.common.by import By
 
     out = Path(path)
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         if tab:
             _switch_tab(driver, tab)
         if selector:
@@ -122,7 +152,7 @@ def cmd_screenshot(
 @app.command(name="url")
 def cmd_url():
     """Show current URL and title."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         typer.echo(driver.title)
         typer.echo(driver.current_url)
 
@@ -134,7 +164,7 @@ def cmd_find(
     """Find visible elements matching text and list them."""
     from selenium.webdriver.common.by import By
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         xpaths = [
             f"//*[contains(text(), '{text}')]",
             f"//*[@aria-label[contains(., '{text}')]]",
@@ -170,7 +200,7 @@ def cmd_go(
     target_url: str = typer.Argument(..., help="URL to navigate to."),
 ):
     """Navigate to URL."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         driver.get(target_url)
         time.sleep(1)
         typer.echo(feedback(driver, f"✓ navigated to {target_url}"))
@@ -183,7 +213,7 @@ def cmd_search(
     """Web search via DuckDuckGo."""
     from foxpilot.search import format_results, search_duckduckgo
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         results = search_duckduckgo(driver, query)
         typer.echo(format_results(results))
 
@@ -195,7 +225,7 @@ def cmd_click(
     tag: Optional[str] = typer.Option(None, "--tag", "-t", help="Filter by HTML tag."),
 ):
     """Click an element by visible text."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         el = find_element(driver, description, role=role, tag=tag)
         if not el:
             typer.echo(f"✗ no element found matching '{description}'")
@@ -216,7 +246,7 @@ def cmd_fill(
     from selenium.webdriver.common.by import By
     from selenium.webdriver.common.keys import Keys
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         el = find_element(driver, description)
         if not el:
             # Fallback: first visible input/textarea
@@ -249,7 +279,7 @@ def cmd_select(
     """Select a dropdown option."""
     from selenium.webdriver.support.ui import Select
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         el = find_element(driver, description, tag="select")
         if not el:
             typer.echo(f"✗ no dropdown found for '{description}'")
@@ -276,7 +306,7 @@ def cmd_scroll(
     """Scroll the page."""
     from selenium.webdriver.common.by import By
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         if to:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, to)
@@ -298,7 +328,7 @@ def cmd_scroll(
 @app.command(name="back")
 def cmd_back():
     """Navigate back."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         driver.back()
         time.sleep(0.8)
         typer.echo(feedback(driver, "✓ back"))
@@ -307,7 +337,7 @@ def cmd_back():
 @app.command(name="forward")
 def cmd_forward():
     """Navigate forward."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         driver.forward()
         time.sleep(0.8)
         typer.echo(feedback(driver, "✓ forward"))
@@ -335,7 +365,7 @@ def cmd_key(
         typer.echo(f"✗ unknown key '{name}'. Supported: {', '.join(KEY_MAP)}")
         raise typer.Exit(1)
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         if focus:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, focus)
@@ -368,7 +398,7 @@ def cmd_new_tab(
     target_url: Optional[str] = typer.Argument(None, help="URL to open (optional)."),
 ):
     """Open a new tab."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         driver.execute_script("window.open('', '_blank');")
         handles = driver.window_handles
         driver.switch_to.window(handles[-1])
@@ -383,7 +413,7 @@ def cmd_close_tab(
     index: Optional[int] = typer.Argument(None, help="Tab index to close (default: current)."),
 ):
     """Close a tab."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         if index is not None:
             handles = driver.window_handles
             if 0 <= index < len(handles):
@@ -405,7 +435,7 @@ def cmd_styles(
     selector: Optional[str] = typer.Argument(None, help="CSS selector (default: body)."),
 ):
     """Extract computed styles and CSS variables from the page."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         data = extract_styles(driver, selector)
 
         typer.echo(f"[{data['element']}]")
@@ -430,7 +460,7 @@ def cmd_styles(
 @app.command(name="assets")
 def cmd_assets():
     """Extract all assets from the page: images, fonts, stylesheets, background images."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         data = extract_assets(driver)
 
         typer.echo(driver.current_url)
@@ -474,7 +504,7 @@ def cmd_fullpage(
     path: str = typer.Argument("/tmp/foxpilot-full.png", help="Output path."),
 ):
     """Take a full-page screenshot (captures entire scroll height)."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         out, size_kb = fullpage_screenshot(driver, path)
         typer.echo(f"✓ fullpage screenshot: {out} ({size_kb:.0f}KB)")
         typer.echo(f"  title: {driver.title}")
@@ -495,7 +525,7 @@ def cmd_burst(
     Produces PNGs the agent's Read tool can view directly — unlike video.
     Use this when you want an agent-readable time-lapse of a page.
     """
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         if target_url:
             driver.get(target_url)
             time.sleep(warmup)
@@ -521,7 +551,7 @@ def cmd_record(
     NOTE: agents can't read video — use `burst` if the frames need to go to
     an agent. `record` is for human-debug clips.
     """
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         if target_url:
             driver.get(target_url)
             time.sleep(warmup)
@@ -546,7 +576,7 @@ def cmd_js(
     expr: str = typer.Argument(..., help="JavaScript expression to evaluate."),
 ):
     """Evaluate JavaScript in the page context."""
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         result = driver.execute_script(f"return {expr};")
         typer.echo(f"✓ {result}")
 
@@ -558,7 +588,7 @@ def cmd_html(
     """Extract raw HTML from page or element."""
     from selenium.webdriver.common.by import By
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         if selector:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, selector)
@@ -578,7 +608,7 @@ def cmd_css_click(
     """Click an element by CSS selector (escape hatch)."""
     from selenium.webdriver.common.by import By
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         try:
             el = driver.find_element(By.CSS_SELECTOR, selector)
             el.click()
@@ -597,7 +627,7 @@ def cmd_css_fill(
     """Fill an input by CSS selector (escape hatch)."""
     from selenium.webdriver.common.by import By
 
-    with browser(mode=_MODE) as driver:
+    with _browser() as driver:
         try:
             el = driver.find_element(By.CSS_SELECTOR, selector)
             el.clear()
@@ -617,6 +647,169 @@ def cmd_mcp():
     """Start the foxpilot MCP server (stdio transport for Claude Code)."""
     from foxpilot.mcp_server import serve
     serve()
+
+
+# ---------------------------------------------------------------------------
+# Claude profile lifecycle (Hyprland scratchpad)
+# ---------------------------------------------------------------------------
+
+@app.command(name="show")
+def cmd_show():
+    """Bring the claude-profile Zen window onto the active workspace."""
+    claude_show()
+    typer.echo("✓ claude window → active workspace")
+
+
+@app.command(name="hide")
+def cmd_hide():
+    """Send the claude-profile Zen window to the special:claude scratchpad."""
+    claude_hide()
+    typer.echo("✓ claude window → special:claude")
+
+
+@app.command(name="import-cookies")
+def cmd_import_cookies(
+    src: Optional[str] = typer.Option(
+        None, "--from", help="Source Zen profile dir (default: auto-detect).",
+    ),
+    domain: Optional[str] = typer.Option(
+        None, "--domain", help="Only import cookies whose host LIKE %domain%.",
+    ),
+    include_storage: bool = typer.Option(
+        False, "--include-storage", help="Also copy DOM Storage / localStorage.",
+    ),
+    include_passwords: bool = typer.Option(
+        False, "--include-passwords",
+        help="Also copy logins.json + key4.db (saved passwords).",
+    ),
+):
+    """Copy cookies from your main Zen profile into the claude profile.
+
+    Bypasses sites that block WebDriver-based logins (Google, Cloudflare-walled
+    sites, etc.). Kills the claude Zen process first so files aren't locked.
+    Your main Zen can stay running — uses SQLite's online backup API.
+    """
+    from pathlib import Path as _Path
+    try:
+        report = import_cookies(
+            src_profile=_Path(src) if src else None,
+            domain=domain,
+            include_storage=include_storage,
+            include_passwords=include_passwords,
+        )
+    except RuntimeError as e:
+        typer.echo(f"✗ {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"✓ imported from: {report['src']}")
+    typer.echo(f"  → {report['dst']}")
+    typer.echo(f"  cookies:   {report['cookies_copied']} rows"
+               + (f" (filtered to *{domain}*)" if domain else ""))
+    typer.echo(f"  storage:   {'yes' if report['storage_copied'] else 'no'}")
+    typer.echo(f"  passwords: {'yes' if report['passwords_copied'] else 'no'}")
+
+
+@app.command(name="status")
+def cmd_status():
+    """Report claude-profile state — running, visibility, profile dir."""
+    s = claude_status()
+    for k, v in s.items():
+        typer.echo(f"{k:<18} {v}")
+
+
+@app.command(name="login")
+def cmd_login(
+    target_url: Optional[str] = typer.Argument(
+        None, help="Site to open for login (default: about:preferences)."
+    ),
+    auto_hide: bool = typer.Option(
+        True, "--auto-hide/--no-auto-hide",
+        help="Hide the browser automatically once URL has changed and stayed "
+             "stable (heuristic for sign-in completion).",
+    ),
+    stable_secs: float = typer.Option(
+        8.0, "--stable", help="Seconds the URL must stay unchanged after a "
+        "change to count as 'signed in'.",
+    ),
+    timeout_secs: float = typer.Option(
+        300.0, "--timeout", help="Hard timeout — hide after this many seconds "
+        "regardless of state.",
+    ),
+):
+    """Open the claude profile visibly so the user can log into sites once.
+
+    With --auto-hide (default): polls the page URL every ~2s and, once the URL
+    has changed from the initial target and then stayed stable for --stable
+    seconds, hides the browser. This catches the typical post-login redirect
+    to a dashboard / home page.
+
+    With --no-auto-hide: opens visibly and exits — user runs `foxpilot hide`
+    when ready.
+
+    Either way, cookies persist in the profile dir for subsequent hidden runs.
+    """
+    from foxpilot.core import claude_hide as _hide
+
+    initial_url = target_url or "about:preferences"
+
+    # Use mode="claude" + visible=True. Don't drop the driver via `with` —
+    # we want to keep the marionette session alive so we can poll URL.
+    from foxpilot.core import _get_driver_claude
+    driver = _get_driver_claude(visible=True)
+    try:
+        driver.get(initial_url)
+        if not auto_hide:
+            typer.echo(
+                "✓ claude profile open and visible. Run `foxpilot hide` when done."
+            )
+            return
+
+        typer.echo(
+            f"✓ claude profile visible at {initial_url}\n"
+            f"  watching for sign-in (URL change + {stable_secs:.0f}s stable).\n"
+            f"  ctrl-c to cancel auto-hide and leave window visible."
+        )
+
+        import time as _t
+        start = _t.monotonic()
+        last_url = driver.current_url
+        last_change = start
+        url_ever_changed = False
+
+        try:
+            while True:
+                _t.sleep(2.0)
+                elapsed = _t.monotonic() - start
+                if elapsed > timeout_secs:
+                    typer.echo(f"⚠ timeout after {timeout_secs:.0f}s — hiding anyway.")
+                    break
+                try:
+                    cur = driver.current_url
+                except Exception:
+                    continue
+                if cur != last_url:
+                    last_url = cur
+                    last_change = _t.monotonic()
+                    if cur != initial_url:
+                        url_ever_changed = True
+                    typer.echo(f"  url → {cur}")
+                    continue
+                if (
+                    url_ever_changed
+                    and (_t.monotonic() - last_change) >= stable_secs
+                ):
+                    typer.echo(f"✓ stable at {cur} — hiding.")
+                    break
+        except KeyboardInterrupt:
+            typer.echo("\n(cancelled — leaving window visible)")
+            return
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    _hide()
+    typer.echo("✓ hidden — claude profile keeps the cookies for next run.")
 
 
 # ---------------------------------------------------------------------------

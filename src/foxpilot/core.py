@@ -1,9 +1,18 @@
 """foxpilot.core — browser connection and shared automation logic."""
 
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Optional
 
 MARIONETTE_PORT = 2828
+
+# Claude mode — dedicated Zen profile with its own marionette port and WM class
+# so it can run alongside the user's main Zen without conflict, and be hidden
+# in a Hyprland special workspace when the agent is working in the background.
+CLAUDE_MARIONETTE_PORT = 2829
+CLAUDE_WM_CLASS = "ClaudeZen"
+CLAUDE_SPECIAL_WORKSPACE = "claude"
+CLAUDE_PROFILE_DIR = Path.home() / ".local/share/foxpilot/claude-profile"
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +109,396 @@ def _get_driver_zen():
     return driver
 
 
+# ---------------------------------------------------------------------------
+# Claude mode — dedicated Zen profile, hidden by default via Hyprland
+# ---------------------------------------------------------------------------
+
+def _claude_marionette_listening() -> bool:
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", CLAUDE_MARIONETTE_PORT), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def _hyprctl_clients() -> list:
+    """Return parsed `hyprctl clients -j`, or [] if Hyprland not available."""
+    import json
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["hyprctl", "clients", "-j"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode != 0:
+            return []
+        return json.loads(out.stdout)
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        return []
+
+
+def _find_claude_window():
+    """Return the first hyprctl client whose initialClass matches our claude
+    Zen window, or None."""
+    for c in _hyprctl_clients():
+        if c.get("initialClass") == CLAUDE_WM_CLASS or c.get("class") == CLAUDE_WM_CLASS:
+            return c
+    return None
+
+
+def _hyprctl_move_window(address: str, workspace: str) -> None:
+    import subprocess
+    subprocess.run(
+        ["hyprctl", "dispatch", "movetoworkspacesilent",
+         f"{workspace},address:{address}"],
+        capture_output=True, timeout=2,
+    )
+
+
+def _set_claude_visibility(visible: bool) -> None:
+    """Move the claude Zen window onto the active workspace (visible) or into
+    the special:claude scratchpad (hidden). No-op if window not found yet."""
+    win = _find_claude_window()
+    if not win:
+        return
+    address = win.get("address")
+    if not address:
+        return
+    if visible:
+        # Move to whatever workspace the user is currently looking at
+        import json
+        import subprocess
+        try:
+            mon = subprocess.run(
+                ["hyprctl", "activeworkspace", "-j"],
+                capture_output=True, text=True, timeout=2,
+            )
+            ws = json.loads(mon.stdout).get("name", "1")
+        except Exception:
+            ws = "1"
+        _hyprctl_move_window(address, ws)
+    else:
+        _hyprctl_move_window(address, f"special:{CLAUDE_SPECIAL_WORKSPACE}")
+
+
+def _ensure_claude_user_js() -> None:
+    """Write a user.js into the claude profile pinning the Marionette port.
+
+    Firefox / Zen do not honor a `--marionette-port` CLI flag; the listener
+    port is read from the `marionette.port` pref when `--marionette` enables
+    the agent. So we set it via user.js, which is loaded before Marionette
+    starts and overrides any prefs.js value.
+    """
+    user_js = CLAUDE_PROFILE_DIR / "user.js"
+    pref_line = f'user_pref("marionette.port", {CLAUDE_MARIONETTE_PORT});'
+    existing = user_js.read_text() if user_js.exists() else ""
+    if pref_line not in existing:
+        user_js.write_text(existing + pref_line + "\n")
+
+
+def _launch_claude_zen() -> None:
+    """Launch a dedicated Zen instance against the claude profile dir, on a
+    separate marionette port, with a custom WM class so Hyprland can target it.
+    """
+    import os
+    import subprocess
+    import time
+
+    CLAUDE_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_claude_user_js()
+
+    env = os.environ.copy()
+    if "DISPLAY" not in env:
+        env["DISPLAY"] = ":0"
+
+    subprocess.Popen(
+        [
+            ZEN_BINARY,
+            "--no-remote",
+            "--profile", str(CLAUDE_PROFILE_DIR),
+            "--class", CLAUDE_WM_CLASS,
+            "--name", CLAUDE_WM_CLASS,
+            "--marionette",
+        ],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for _ in range(20):
+        time.sleep(0.5)
+        if _claude_marionette_listening():
+            return
+    raise RuntimeError("Launched claude Zen but Marionette port never opened.")
+
+
+def _get_driver_claude(visible: bool = False):
+    """Connect to (or launch) the dedicated claude Zen profile.
+
+    visible=False (default): the window lives in the Hyprland special:claude
+        scratchpad — off-screen, but driveable via Marionette.
+    visible=True: window moved onto the user's active workspace.
+    """
+    import time
+    from selenium import webdriver
+    from selenium.webdriver.firefox.options import Options
+    from selenium.webdriver.firefox.service import Service
+
+    if not _claude_marionette_listening():
+        _launch_claude_zen()
+        time.sleep(1)
+
+    # Place the window per the requested visibility BEFORE we start driving it,
+    # so the user never sees it pop up if they asked for hidden.
+    # Small retry loop because the window may take a beat to register with WM.
+    import time as _t
+    for _ in range(10):
+        if _find_claude_window():
+            break
+        _t.sleep(0.2)
+    _set_claude_visibility(visible)
+
+    opts = Options()
+    service = Service(
+        service_args=[
+            "--connect-existing",
+            "--marionette-port", str(CLAUDE_MARIONETTE_PORT),
+        ]
+    )
+    try:
+        driver = webdriver.Firefox(options=opts, service=service)
+    except Exception as e:
+        raise RuntimeError(
+            f"Can't connect to claude Zen on Marionette port "
+            f"{CLAUDE_MARIONETTE_PORT}. Error: {e}"
+        ) from e
+
+    try:
+        driver.execute_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+    except Exception:
+        pass
+
+    return driver
+
+
+def claude_show() -> None:
+    """Bring the claude Zen window onto the active workspace."""
+    _set_claude_visibility(True)
+
+
+def claude_hide() -> None:
+    """Send the claude Zen window to the special:claude scratchpad."""
+    _set_claude_visibility(False)
+
+
+def _detect_main_zen_profile() -> Optional[Path]:
+    """Read ~/.zen/profiles.ini and return the path of the active zen profile.
+
+    Prefers the profile pinned by the Install section, falls back to the
+    profile with Default=1, then the most recently-modified cookies.sqlite.
+    """
+    import configparser
+    zen_root = Path.home() / ".zen"
+    ini = zen_root / "profiles.ini"
+    if not ini.exists():
+        return None
+
+    cp = configparser.ConfigParser(strict=False)
+    try:
+        cp.read(ini)
+    except Exception:
+        return None
+
+    install_default = None
+    profiles: list[Path] = []
+    default_profile: Optional[Path] = None
+
+    for section in cp.sections():
+        if section.startswith("Install"):
+            install_default = cp[section].get("Default")
+        elif section.startswith("Profile"):
+            path = cp[section].get("Path")
+            if not path:
+                continue
+            is_relative = cp[section].get("IsRelative", "1") == "1"
+            full = (zen_root / path) if is_relative else Path(path)
+            if (full / "cookies.sqlite").exists():
+                profiles.append(full)
+            if cp[section].get("Default") == "1":
+                default_profile = full
+
+    if install_default:
+        candidate = zen_root / install_default
+        if candidate.exists():
+            return candidate
+    if default_profile:
+        return default_profile
+    if profiles:
+        profiles.sort(
+            key=lambda p: (p / "cookies.sqlite").stat().st_mtime, reverse=True
+        )
+        return profiles[0]
+    return None
+
+
+def _kill_claude_zen() -> None:
+    """Kill any running ClaudeZen-class zen processes so we can write to the
+    profile dir without locking issues."""
+    import subprocess
+    import time
+    # `--` stops pkill from treating later args starting with `--` as options.
+    subprocess.run(
+        ["pkill", "-f", "--", CLAUDE_WM_CLASS],
+        capture_output=True,
+    )
+    for _ in range(20):
+        if not _claude_marionette_listening():
+            break
+        time.sleep(0.3)
+
+
+def import_cookies(
+    src_profile: Optional[Path] = None,
+    domain: Optional[str] = None,
+    include_storage: bool = False,
+    include_passwords: bool = False,
+) -> dict:
+    """Copy cookies (and optionally localStorage / saved logins) from the
+    user's main Zen profile into the claude profile.
+
+    Uses SQLite's online backup API so copying from a live source database
+    (the user's running Zen) is safe. The claude profile must NOT be running
+    while we write to it — this function kills it first.
+
+    Args:
+        src_profile: path to source Zen profile dir; auto-detected if None.
+        domain: if given, only import cookies whose host LIKE %domain%.
+        include_storage: also copy webappsstore.sqlite (DOM Storage / localStorage).
+        include_passwords: also copy logins.json + key4.db (saved passwords).
+    """
+    import shutil
+    import sqlite3
+
+    if src_profile is None:
+        src_profile = _detect_main_zen_profile()
+    if src_profile is None or not src_profile.exists():
+        raise RuntimeError(
+            "Couldn't auto-detect a main Zen profile. Pass --from explicitly."
+        )
+
+    _kill_claude_zen()
+    CLAUDE_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_claude_user_js()
+
+    report: dict = {
+        "src": str(src_profile),
+        "dst": str(CLAUDE_PROFILE_DIR),
+        "cookies_copied": 0,
+        "storage_copied": False,
+        "passwords_copied": False,
+    }
+
+    # ---- cookies.sqlite ----
+    # SQLite's online backup retries on SQLITE_BUSY, which the user's live
+    # Zen triggers constantly. Instead: take a filesystem snapshot of the
+    # .sqlite + .sqlite-wal pair, then operate on the snapshot.
+    src_cookies = src_profile / "cookies.sqlite"
+    dst_cookies = CLAUDE_PROFILE_DIR / "cookies.sqlite"
+    if not src_cookies.exists():
+        raise RuntimeError(f"No cookies.sqlite at {src_cookies}")
+
+    import tempfile
+    tmp_dir = Path(tempfile.mkdtemp(prefix="foxpilot-cookies-"))
+    try:
+        snap = tmp_dir / "cookies.sqlite"
+        shutil.copy2(src_cookies, snap)
+        for ext in ("-wal", "-shm"):
+            src_extra = Path(str(src_cookies) + ext)
+            if src_extra.exists():
+                shutil.copy2(src_extra, str(snap) + ext)
+
+        # Now operate on the snapshot — no live writer to fight.
+        snap_conn = sqlite3.connect(snap)
+        try:
+            if domain:
+                snap_conn.execute(
+                    "DELETE FROM moz_cookies WHERE host NOT LIKE ?",
+                    (f"%{domain}%",),
+                )
+                snap_conn.commit()
+            # Force WAL contents into the main db file so we can move just the
+            # one file across.
+            snap_conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            report["cookies_copied"] = snap_conn.execute(
+                "SELECT COUNT(*) FROM moz_cookies"
+            ).fetchone()[0]
+        finally:
+            snap_conn.close()
+
+        # Replace dst — wipe any old WAL/SHM that referenced the prior file.
+        for ext in ("", "-wal", "-shm"):
+            p = Path(str(dst_cookies) + ext)
+            if p.exists():
+                p.unlink()
+        shutil.move(str(snap), str(dst_cookies))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # ---- webappsstore.sqlite (DOM Storage / localStorage) ----
+    if include_storage:
+        src_store = src_profile / "webappsstore.sqlite"
+        if src_store.exists():
+            dst_store = CLAUDE_PROFILE_DIR / "webappsstore.sqlite"
+            for ext in ("", "-wal", "-shm"):
+                p = Path(str(dst_store) + ext)
+                if p.exists():
+                    p.unlink()
+            shutil.copy2(src_store, dst_store)
+            for ext in ("-wal", "-shm"):
+                src_extra = Path(str(src_store) + ext)
+                if src_extra.exists():
+                    shutil.copy2(src_extra, str(dst_store) + ext)
+            # Checkpoint to consolidate
+            try:
+                conn = sqlite3.connect(dst_store)
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                conn.close()
+            except Exception:
+                pass
+            report["storage_copied"] = True
+
+    # ---- logins.json + key4.db (saved passwords) ----
+    if include_passwords:
+        for fname in ("logins.json", "key4.db"):
+            src_f = src_profile / fname
+            if src_f.exists():
+                shutil.copy2(src_f, CLAUDE_PROFILE_DIR / fname)
+                report["passwords_copied"] = True
+
+    return report
+
+
+def claude_status() -> dict:
+    """Report claude profile state — running, marionette port, visibility."""
+    win = _find_claude_window()
+    visible = False
+    workspace = None
+    if win:
+        ws = win.get("workspace", {}) or {}
+        workspace = ws.get("name")
+        visible = not (workspace or "").startswith("special:")
+    return {
+        "running": _claude_marionette_listening(),
+        "window_present": win is not None,
+        "visible": visible,
+        "workspace": workspace,
+        "profile_dir": str(CLAUDE_PROFILE_DIR),
+        "marionette_port": CLAUDE_MARIONETTE_PORT,
+    }
+
+
 def _get_driver_headless():
     """Launch a headless Firefox instance."""
     from selenium import webdriver
@@ -116,15 +515,21 @@ def _get_driver_headless():
 
 
 @contextmanager
-def browser(mode: str = "headless"):
+def browser(mode: str = "claude", visible: bool = False):
     """Yield a WebDriver; close it on exit.
 
-    mode="zen"      — connect to user's running Zen browser
-    mode="headless" — launch ephemeral headless Firefox
+    mode="claude"   — dedicated Zen profile, hidden by default (default)
+    mode="zen"      — connect to user's running Zen browser (shares your tabs)
+    mode="headless" — launch ephemeral headless Firefox (no session)
+    visible         — only meaningful for mode="claude"; True puts the window
+                      on the active workspace, False leaves it hidden in the
+                      Hyprland special:claude scratchpad.
     """
     driver = None
     try:
-        if mode == "zen":
+        if mode == "claude":
+            driver = _get_driver_claude(visible=visible)
+        elif mode == "zen":
             driver = _get_driver_zen()
         else:
             driver = _get_driver_headless()

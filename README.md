@@ -1,6 +1,6 @@
 # foxpilot
 
-Firefox browser automation for AI agents. Controls headless Firefox for independent web research, or connects to a running [Zen browser](https://zen-browser.app/) session to act with your existing logins and cookies.
+Firefox browser automation for AI agents. Three modes: a dedicated **claude profile** that runs hidden in a Hyprland scratchpad (default), an attach-to-your-real-Zen mode, and a fully ephemeral **headless** mode for stateless research.
 
 Available as both a **CLI tool** and an **MCP server** for Claude Code.
 
@@ -14,17 +14,79 @@ pip install -e .
 
 Requires:
 - Python 3.11+
-- Firefox installed
-- `geckodriver` on `PATH` (for Zen mode and headless)
+- Firefox / Zen installed (`zen-browser` on `PATH` for the `claude` and `zen` modes)
+- `geckodriver` on `PATH`
+- `hyprctl` on `PATH` if you want the hide/show toggling in `claude` mode
 
 ---
 
 ## Modes
 
-| Mode | Description |
-|---|---|
-| `headless` | Launches a fresh, ephemeral Firefox instance. No existing session. Default. |
-| `zen` | Connects to your running Zen browser via Marionette (port 2828). Uses your cookies and logins. |
+| Mode | Profile | Window | Shares your session? | Use when |
+|---|---|---|---|---|
+| `claude` (default) | dedicated `~/.local/share/foxpilot/claude-profile` | Hyprland `special:claude` scratchpad (hidden), or active workspace if `--visible` | No — its own profile, you log it in once via `foxpilot login` | The agent should drive a real, authenticated browser without taking over your screen. |
+| `zen` | your real Zen profile | your real Zen window | Yes — same tabs, same logins | The agent specifically needs to act on your real browsing session (e.g. open a tab in the window you're using). |
+| `headless` | ephemeral, throwaway | none — no display | No | One-shot stateless research where no session is needed and zero side effects are wanted. |
+
+### Claude mode — how it works
+
+`claude` mode launches Zen with `--no-remote --profile <claude-profile-dir> --marionette --marionette-port 2829 --class ClaudeZen`. That gives the dedicated instance:
+
+- **Its own profile dir**, so cookies / extensions / logins are isolated from your main browsing.
+- **A separate Marionette port** (2829), so it doesn't collide with `zen` mode (port 2828).
+- **A unique WM class** (`ClaudeZen`), so Hyprland can target it independently of your main Zen.
+
+When the agent runs a command:
+
+1. If the claude Zen process isn't running, foxpilot launches it in the background.
+2. Once the window appears, foxpilot moves it according to `--visible`:
+   - `--visible` → moved onto your active workspace.
+   - default (hidden) → moved into the `special:claude` scratchpad workspace.
+3. The agent drives the browser via Marionette as usual.
+
+The window stays where it was placed across subsequent commands — running an agent task does **not** disturb your active workspace unless you explicitly ask for `--visible`.
+
+#### First-time login
+
+The claude profile starts empty. Two ways to populate it.
+
+**Option 1 — import cookies from your main Zen profile (preferred for sites that block WebDriver):**
+
+```bash
+foxpilot import-cookies                                  # all cookies, every domain
+foxpilot import-cookies --domain google.com              # filter by host
+foxpilot import-cookies --domain github.com --include-storage   # also localStorage
+foxpilot import-cookies --include-passwords              # also key4.db + logins.json
+```
+
+Your main Zen can stay running — foxpilot snapshots the SQLite files first to avoid lock contention. The claude profile is killed during the import and re-launched on the next agent command. After importing, the agent is signed in immediately — no login flow.
+
+This is the only reliable approach for sites with active anti-automation (Google, Cloudflare-walled apps, Twitter/X, Discord). They detect Marionette/WebDriver and refuse to let an automated browser sign in even with valid credentials.
+
+**Option 2 — interactive login (sites that don't block WebDriver):**
+
+```bash
+foxpilot login                          # opens about:preferences visibly
+foxpilot login https://github.com       # opens straight to a login page
+```
+
+The window appears visibly on your active workspace. You sign in. Once the URL changes and stays stable for ~8 seconds (the typical post-login redirect to a dashboard), the browser auto-hides. Pass `--no-auto-hide` to keep it visible.
+
+Cookies persist in `~/.local/share/foxpilot/claude-profile` regardless of which method you used.
+
+#### Limitation
+
+`foxpilot login` cannot bypass anti-automation pages — Google, for example, redirects WebDriver-controlled browsers straight to `signin/rejected`. When that happens, use `import-cookies` instead.
+
+#### Switching visibility on the fly
+
+```bash
+foxpilot show       # bring claude Zen onto active workspace
+foxpilot hide       # send it back to special:claude
+foxpilot status     # show running / window present / visibility / port
+```
+
+You can also call `hyprctl dispatch togglespecialworkspace claude` directly — the special workspace is a normal Hyprland scratchpad, so all the usual keybinds work.
 
 ### Zen mode — how it works
 
@@ -48,13 +110,27 @@ foxpilot handles this by detecting the port state and managing the relaunch itse
 
 ## CLI
 
-### Global flag
+### Global flags
 
 ```bash
-foxpilot [--zen] <command> [args]
+foxpilot [--zen | --visible | --headless-mode] <command> [args]
 ```
 
-Pass `--zen` / `-z` before the command to operate on your running Zen browser. Omit it for headless.
+| Flag | Effect |
+|---|---|
+| *(none)* | **Default** — uses the dedicated `claude` profile, hidden in `special:claude` workspace. |
+| `-V` / `--visible` | With `claude` mode, places the window on your active workspace for this run. |
+| `-z` / `--zen` | Operate on your real running Zen instance instead. |
+| `--headless-mode` | Force ephemeral headless Firefox (no profile, no session). |
+
+Examples:
+
+```bash
+foxpilot go https://example.com           # claude profile, hidden
+foxpilot --visible go https://example.com # claude profile, on screen
+foxpilot --zen tabs                        # your real Zen
+foxpilot --headless-mode search "query"   # one-shot ephemeral
+```
 
 ### Observation commands
 
@@ -252,6 +328,60 @@ Close a tab. Omit index to close the current tab.
 foxpilot close-tab
 foxpilot --zen close-tab 3
 ```
+
+### Claude profile lifecycle
+
+Manages the dedicated `claude`-mode Zen instance — does not perform browser actions.
+
+#### `login [url]`
+
+Open the claude profile **visibly** so you can sign into a site once. Cookies persist in the profile dir, so subsequent hidden agent commands reuse the session.
+
+```bash
+foxpilot login                          # opens about:preferences
+foxpilot login https://github.com       # opens straight to a login page
+```
+
+#### `show` / `hide`
+
+Move the claude Zen window between the active workspace (`show`) and the `special:claude` Hyprland scratchpad (`hide`).
+
+```bash
+foxpilot show
+foxpilot hide
+```
+
+#### `status`
+
+Report whether the claude profile is running, where its window lives, and which port it's on.
+
+```bash
+foxpilot status
+# running            True
+# window_present     True
+# visible            False
+# workspace          special:claude
+# profile_dir        /home/you/.local/share/foxpilot/claude-profile
+# marionette_port    2829
+```
+
+#### `import-cookies [--from PATH] [--domain SUB] [--include-storage] [--include-passwords]`
+
+Copy cookies from your main Zen profile into the claude profile. Required for sites that block WebDriver-controlled sign-in (Google et al.). Auto-detects the source profile from `~/.zen/profiles.ini` if `--from` is omitted.
+
+```
+--from              Source Zen profile dir (default: auto-detect)
+--domain            Only import cookies whose host LIKE %domain%
+--include-storage   Also copy webappsstore.sqlite (localStorage)
+--include-passwords Also copy logins.json + key4.db
+```
+
+```bash
+foxpilot import-cookies --domain google.com --include-storage
+foxpilot go https://myaccount.google.com    # already signed in
+```
+
+Stops the claude Zen process before writing, snapshots the source SQLite files first so the user's live Zen doesn't lock the import.
 
 ### Design inspection
 
@@ -508,7 +638,12 @@ Add to your MCP settings (`.claude/settings.json` or global settings):
 
 ### MCP tools
 
-All CLI commands are available as MCP tools with the same names, plus a `mode` parameter (`"headless"` or `"zen"`). The tab switching command is named `tab_switch` and `new_tab` / `close_tab` use underscores.
+All CLI commands are available as MCP tools with the same names. Each accepts:
+
+- `mode` — `"claude"` (default), `"zen"`, or `"headless"`.
+- `visible` — only meaningful when `mode="claude"`. `False` (default) keeps the window in `special:claude`. `True` brings it onto the active workspace for this run.
+
+The tab switching command is named `tab_switch` and `new_tab` / `close_tab` use underscores.
 
 | CLI command | MCP tool |
 |---|---|
@@ -536,6 +671,10 @@ All CLI commands are available as MCP tools with the same names, plus a `mode` p
 | `styles` | `styles` |
 | `assets` | `assets` |
 | `fullpage` | `fullpage` |
+| `show` | `show` |
+| `hide` | `hide` |
+| `status` | `status` |
+| `login` | `login` |
 
 Screenshot paths returned by the MCP `screenshot` tool can be opened with the Claude Code `Read` tool to view the image.
 

@@ -1,19 +1,21 @@
 """foxpilot.mcp_server — MCP stdio server for Claude Code.
 
 Each tool mirrors the CLI command with the same name and semantics.
-All tools accept an optional `mode` parameter: "headless" (default) or "zen".
+
+All tools accept:
+    mode    — "claude" (default), "zen", or "headless".
+              "claude" uses a dedicated Zen profile, hidden in a Hyprland
+              special workspace so it does not steal the user's screen.
+              "zen" attaches to the user's running Zen instance (shares tabs).
+              "headless" launches an ephemeral Firefox with no session.
+    visible — only meaningful for mode="claude". When False (default) the
+              window stays in the special:claude scratchpad. Set True to
+              bring it onto the user's active workspace.
+
+Lifecycle tools (`show`, `hide`, `status`, `login`) manage the dedicated
+claude profile without performing browser actions.
 
 Start with: foxpilot mcp
-Configure in Claude Code settings:
-    {
-      "mcpServers": {
-        "foxpilot": {
-          "command": "foxpilot",
-          "args": ["mcp"],
-          "type": "stdio"
-        }
-      }
-    }
 """
 
 import time
@@ -24,6 +26,9 @@ from mcp.server.fastmcp import FastMCP
 from foxpilot.core import (
     browser,
     burst_screenshots,
+    claude_hide,
+    claude_show,
+    claude_status,
     describe_element,
     extract_assets,
     extract_styles,
@@ -66,20 +71,20 @@ def tabs() -> str:
 
 
 @mcp.tool()
-def read(selector: str = "", mode: str = "headless") -> str:
+def read(selector: str = "", mode: str = "claude", visible: bool = False) -> str:
     """Extract main readable content from the current page.
 
     Args:
         selector: Optional CSS selector to scope extraction to a specific element.
         mode: "headless" (default) or "zen" to read from user's browser.
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         text = read_page(driver, selector or None, max_chars=4000)
         return f"[{driver.title}]\n{driver.current_url}\n{'-'*60}\n{text}"
 
 
 @mcp.tool()
-def screenshot(path: str = "/tmp/foxpilot-snap.png", selector: str = "", mode: str = "headless") -> str:
+def screenshot(path: str = "/tmp/foxpilot-snap.png", selector: str = "", mode: str = "claude", visible: bool = False) -> str:
     """Take a screenshot and save to disk.
 
     Args:
@@ -93,7 +98,7 @@ def screenshot(path: str = "/tmp/foxpilot-snap.png", selector: str = "", mode: s
     from selenium.webdriver.common.by import By
 
     out = Path(path)
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         if selector:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, selector)
@@ -113,18 +118,18 @@ def screenshot(path: str = "/tmp/foxpilot-snap.png", selector: str = "", mode: s
 
 
 @mcp.tool()
-def url(mode: str = "headless") -> str:
+def url(mode: str = "claude", visible: bool = False) -> str:
     """Get the current page URL and title.
 
     Args:
         mode: "headless" or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         return f"{driver.title}\n{driver.current_url}"
 
 
 @mcp.tool()
-def find(text: str, mode: str = "headless") -> str:
+def find(text: str, mode: str = "claude", visible: bool = False) -> str:
     """Find visible elements on the page matching text.
 
     Args:
@@ -133,7 +138,7 @@ def find(text: str, mode: str = "headless") -> str:
     """
     from selenium.webdriver.common.by import By
 
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         xpaths = [
             f"//*[contains(text(), '{text}')]",
             f"//*[@aria-label[contains(., '{text}')]]",
@@ -166,7 +171,7 @@ def find(text: str, mode: str = "headless") -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def go(target_url: str, mode: str = "headless") -> str:
+def go(target_url: str, mode: str = "claude", visible: bool = False) -> str:
     """Navigate to a URL.
 
     Args:
@@ -175,27 +180,27 @@ def go(target_url: str, mode: str = "headless") -> str:
 
     Returns current page state after navigation.
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         driver.get(target_url)
         time.sleep(1)
         return feedback(driver, f"✓ navigated to {target_url}")
 
 
 @mcp.tool()
-def search(query: str, mode: str = "headless") -> str:
+def search(query: str, mode: str = "claude", visible: bool = False) -> str:
     """Search the web via DuckDuckGo and return structured results.
 
     Args:
         query: Search query string.
         mode: "headless" (default) or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         results = search_duckduckgo(driver, query)
         return format_results(results)
 
 
 @mcp.tool()
-def click(description: str, role: str = "", tag: str = "", mode: str = "headless") -> str:
+def click(description: str, role: str = "", tag: str = "", mode: str = "claude", visible: bool = False) -> str:
     """Click an element found by visible text, aria-label, or placeholder.
 
     Args:
@@ -206,7 +211,7 @@ def click(description: str, role: str = "", tag: str = "", mode: str = "headless
 
     Returns what was clicked and current page state.
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         el = find_element(driver, description, role=role or None, tag=tag or None)
         if not el:
             return f"✗ no element found matching '{description}'"
@@ -217,7 +222,7 @@ def click(description: str, role: str = "", tag: str = "", mode: str = "headless
 
 
 @mcp.tool()
-def fill(description: str, value: str, submit: bool = False, mode: str = "headless") -> str:
+def fill(description: str, value: str, submit: bool = False, mode: str = "claude", visible: bool = False) -> str:
     """Fill a text input found by label or placeholder.
 
     Args:
@@ -229,7 +234,7 @@ def fill(description: str, value: str, submit: bool = False, mode: str = "headle
     from selenium.webdriver.common.by import By
     from selenium.webdriver.common.keys import Keys
 
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         el = find_element(driver, description)
         if not el:
             inputs = driver.find_elements(
@@ -252,7 +257,7 @@ def fill(description: str, value: str, submit: bool = False, mode: str = "headle
 
 
 @mcp.tool()
-def select(description: str, value: str, mode: str = "headless") -> str:
+def select(description: str, value: str, mode: str = "claude", visible: bool = False) -> str:
     """Select a dropdown option by label text.
 
     Args:
@@ -262,7 +267,7 @@ def select(description: str, value: str, mode: str = "headless") -> str:
     """
     from selenium.webdriver.support.ui import Select as SeleniumSelect
 
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         el = find_element(driver, description, tag="select")
         if not el:
             return f"✗ no dropdown found for '{description}'"
@@ -280,7 +285,7 @@ def select(description: str, value: str, mode: str = "headless") -> str:
 
 
 @mcp.tool()
-def scroll(y: int = 600, to: str = "", mode: str = "headless") -> str:
+def scroll(y: int = 600, to: str = "", mode: str = "claude", visible: bool = False) -> str:
     """Scroll the page.
 
     Args:
@@ -290,7 +295,7 @@ def scroll(y: int = 600, to: str = "", mode: str = "headless") -> str:
     """
     from selenium.webdriver.common.by import By
 
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         if to:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, to)
@@ -309,33 +314,33 @@ def scroll(y: int = 600, to: str = "", mode: str = "headless") -> str:
 
 
 @mcp.tool()
-def back(mode: str = "headless") -> str:
+def back(mode: str = "claude", visible: bool = False) -> str:
     """Navigate back in browser history.
 
     Args:
         mode: "headless" or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         driver.back()
         time.sleep(0.8)
         return feedback(driver, "✓ back")
 
 
 @mcp.tool()
-def forward(mode: str = "headless") -> str:
+def forward(mode: str = "claude", visible: bool = False) -> str:
     """Navigate forward in browser history.
 
     Args:
         mode: "headless" or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         driver.forward()
         time.sleep(0.8)
         return feedback(driver, "✓ forward")
 
 
 @mcp.tool()
-def key(name: str, focus: str = "", mode: str = "headless") -> str:
+def key(name: str, focus: str = "", mode: str = "claude", visible: bool = False) -> str:
     """Press a keyboard key.
 
     Args:
@@ -359,7 +364,7 @@ def key(name: str, focus: str = "", mode: str = "headless") -> str:
     if not key_val:
         return f"✗ unknown key '{name}'. Supported: {', '.join(KEY_MAP)}"
 
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         if focus:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, focus)
@@ -389,14 +394,14 @@ def tab_switch(target: str) -> str:
 
 
 @mcp.tool()
-def new_tab(target_url: str = "", mode: str = "headless") -> str:
+def new_tab(target_url: str = "", mode: str = "claude", visible: bool = False) -> str:
     """Open a new browser tab.
 
     Args:
         target_url: URL to open in the new tab (optional).
         mode: "headless" or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         driver.execute_script("window.open('', '_blank');")
         handles = driver.window_handles
         driver.switch_to.window(handles[-1])
@@ -407,14 +412,14 @@ def new_tab(target_url: str = "", mode: str = "headless") -> str:
 
 
 @mcp.tool()
-def close_tab(index: int = -1, mode: str = "headless") -> str:
+def close_tab(index: int = -1, mode: str = "claude", visible: bool = False) -> str:
     """Close a browser tab.
 
     Args:
         index: Tab index to close (-1 = current tab).
         mode: "headless" or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         if index >= 0:
             handles = driver.window_handles
             if index < len(handles):
@@ -431,7 +436,7 @@ def close_tab(index: int = -1, mode: str = "headless") -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def styles(selector: str = "", mode: str = "zen") -> str:
+def styles(selector: str = "", mode: str = "claude", visible: bool = False) -> str:
     """Extract computed styles and CSS custom properties from the page.
 
     Args:
@@ -440,7 +445,7 @@ def styles(selector: str = "", mode: str = "zen") -> str:
 
     Returns computed styles, CSS variables, and colors found on the page.
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         data = extract_styles(driver, selector or None)
         lines = [f"[{data['element']}]", driver.current_url]
 
@@ -463,7 +468,7 @@ def styles(selector: str = "", mode: str = "zen") -> str:
 
 
 @mcp.tool()
-def assets(mode: str = "zen") -> str:
+def assets(mode: str = "claude", visible: bool = False) -> str:
     """Extract all assets from the page: images, fonts, stylesheets, background images.
 
     Args:
@@ -471,7 +476,7 @@ def assets(mode: str = "zen") -> str:
 
     Returns a structured list of all assets found on the current page.
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         data = extract_assets(driver)
         lines = [driver.current_url]
 
@@ -512,7 +517,7 @@ def assets(mode: str = "zen") -> str:
 
 
 @mcp.tool()
-def fullpage(path: str = "/tmp/foxpilot-full.png", mode: str = "zen") -> str:
+def fullpage(path: str = "/tmp/foxpilot-full.png", mode: str = "claude", visible: bool = False) -> str:
     """Take a full-page screenshot capturing the entire scroll height.
 
     Args:
@@ -521,7 +526,7 @@ def fullpage(path: str = "/tmp/foxpilot-full.png", mode: str = "zen") -> str:
 
     Returns the saved path so you can read it with the Read tool.
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         out, size_kb = fullpage_screenshot(driver, path)
         return (
             f"✓ fullpage screenshot: {out} ({size_kb:.0f}KB)\n"
@@ -538,7 +543,8 @@ def burst(
     interval_ms: int = 500,
     out_dir: str = "/tmp/foxpilot-burst",
     warmup_s: float = 1.0,
-    mode: str = "headless",
+    mode: str = "claude",
+    visible: bool = False,
 ) -> str:
     """Take a burst of N screenshots spaced `interval_ms` apart.
 
@@ -554,7 +560,7 @@ def burst(
         warmup_s: Seconds to wait after navigate before first frame.
         mode: "headless" or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         if target_url:
             driver.get(target_url)
             time.sleep(warmup_s)
@@ -579,7 +585,8 @@ def record(
     out_path: str = "/tmp/foxpilot-clip.mp4",
     warmup_s: float = 1.0,
     keep_frames: bool = False,
-    mode: str = "headless",
+    mode: str = "claude",
+    visible: bool = False,
 ) -> str:
     """Record a video clip by frame-bursting, then stitching with ffmpeg.
 
@@ -595,7 +602,7 @@ def record(
         keep_frames: If True, keep raw PNG frames alongside the video.
         mode: "headless" or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         if target_url:
             driver.get(target_url)
             time.sleep(warmup_s)
@@ -622,20 +629,20 @@ def record(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def js(expression: str, mode: str = "headless") -> str:
+def js(expression: str, mode: str = "claude", visible: bool = False) -> str:
     """Evaluate JavaScript in the page and return the result.
 
     Args:
         expression: JavaScript expression (will be wrapped in `return ...`).
         mode: "headless" or "zen".
     """
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         result = driver.execute_script(f"return {expression};")
         return f"✓ {result}"
 
 
 @mcp.tool()
-def html(selector: str = "", mode: str = "headless") -> str:
+def html(selector: str = "", mode: str = "claude", visible: bool = False) -> str:
     """Extract raw HTML from the page or a specific element.
 
     Args:
@@ -644,7 +651,7 @@ def html(selector: str = "", mode: str = "headless") -> str:
     """
     from selenium.webdriver.common.by import By
 
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         if selector:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, selector)
@@ -659,7 +666,7 @@ def html(selector: str = "", mode: str = "headless") -> str:
 
 
 @mcp.tool()
-def css_click(selector: str, mode: str = "headless") -> str:
+def css_click(selector: str, mode: str = "claude", visible: bool = False) -> str:
     """Click an element by CSS selector (escape hatch when text matching fails).
 
     Args:
@@ -668,7 +675,7 @@ def css_click(selector: str, mode: str = "headless") -> str:
     """
     from selenium.webdriver.common.by import By
 
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         try:
             el = driver.find_element(By.CSS_SELECTOR, selector)
             el.click()
@@ -679,7 +686,7 @@ def css_click(selector: str, mode: str = "headless") -> str:
 
 
 @mcp.tool()
-def css_fill(selector: str, value: str, mode: str = "headless") -> str:
+def css_fill(selector: str, value: str, mode: str = "claude", visible: bool = False) -> str:
     """Fill an input by CSS selector (escape hatch when text matching fails).
 
     Args:
@@ -689,7 +696,7 @@ def css_fill(selector: str, value: str, mode: str = "headless") -> str:
     """
     from selenium.webdriver.common.by import By
 
-    with browser(mode=mode) as driver:
+    with browser(mode=mode, visible=visible) as driver:
         try:
             el = driver.find_element(By.CSS_SELECTOR, selector)
             el.clear()
@@ -697,6 +704,59 @@ def css_fill(selector: str, value: str, mode: str = "headless") -> str:
             return feedback(driver, f"✓ filled '{selector}' with '{value}'")
         except Exception as e:
             return f"✗ {e}"
+
+
+# ---------------------------------------------------------------------------
+# Claude profile lifecycle (Hyprland scratchpad)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def show() -> str:
+    """Bring the claude-profile Zen window onto the user's active workspace.
+
+    Use only when the user explicitly wants to see the agent operate the
+    browser (e.g. they ask to demo a flow, or solve a CAPTCHA). Otherwise
+    leave the browser hidden — it works fine off-screen.
+    """
+    claude_show()
+    return "✓ claude window → active workspace"
+
+
+@mcp.tool()
+def hide() -> str:
+    """Send the claude-profile Zen window to the special:claude scratchpad.
+
+    Call this after a `show` once the user has seen what they wanted.
+    """
+    claude_hide()
+    return "✓ claude window → special:claude (hidden)"
+
+
+@mcp.tool()
+def status() -> str:
+    """Report claude-profile state — running, visibility, profile dir, port."""
+    s = claude_status()
+    return "\n".join(f"{k:<18} {v}" for k, v in s.items())
+
+
+@mcp.tool()
+def login(target_url: str = "") -> str:
+    """Open the claude profile visibly so the USER can log into a site once.
+
+    Cookies persist in the profile dir, so subsequent hidden agent commands
+    reuse the session. Use this when the agent needs an authenticated session
+    on a site for the first time. After this, run `hide` (or just leave it —
+    next agent command will not move the window unless asked).
+
+    Args:
+        target_url: Site URL to open for login (default: about:preferences).
+    """
+    with browser(mode="claude", visible=True) as driver:
+        driver.get(target_url or "about:preferences")
+    return (
+        "✓ claude profile open and visible. Hand off to the user — they should "
+        "log in, then call `hide` (or do nothing; the window stays put)."
+    )
 
 
 # ---------------------------------------------------------------------------
