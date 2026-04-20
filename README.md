@@ -30,7 +30,9 @@ Requires:
 
 ### Claude mode — how it works
 
-`claude` mode launches Zen with `--no-remote --profile <claude-profile-dir> --marionette --marionette-port 2829 --class ClaudeZen`. That gives the dedicated instance:
+`claude` mode launches Zen with `--no-remote --profile <claude-profile-dir> --marionette --class ClaudeZen --name ClaudeZen`. Before launch, foxpilot writes `marionette.port = 2829` into a `user.js` file inside the profile dir (Firefox / Zen do not honor `--marionette-port` on the command line — the listener port is read from prefs).
+
+That gives the dedicated instance:
 
 - **Its own profile dir**, so cookies / extensions / logins are isolated from your main browsing.
 - **A separate Marionette port** (2829), so it doesn't collide with `zen` mode (port 2828).
@@ -767,9 +769,13 @@ When foxpilot kills and relaunches Zen to enable Marionette, Zen's session resto
 
 ```
 foxpilot/
-├── core.py         Browser connection, Zen auto-launch, tab listing, element finding, page reading
+├── core.py         Browser connection (claude/zen/headless), Zen auto-launch,
+│                   Hyprland show/hide, cookie import, tab listing, element
+│                   finding, page reading
 ├── cli.py          Typer CLI (foxpilot command)
 ├── mcp_server.py   FastMCP server (foxpilot mcp)
 ├── search.py       DuckDuckGo search via HTML interface
 └── readability.py  Main content extraction heuristics
 ```
+
+The `claude` profile lives at `~/.local/share/foxpilot/claude-profile/`. foxpilot manages a `user.js` inside it that pins `marionette.port = 2829`. Cookies imported via `import-cookies` land at `<profile>/cookies.sqlite`.
