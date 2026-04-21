@@ -1121,6 +1121,69 @@ def find_element(driver, text: str, role: Optional[str] = None, tag: Optional[st
     return None
 
 
+def find_input_element(driver, text: str):
+    """Find a form input (input/textarea/select) by label text, placeholder, name, or id.
+
+    Resolves label→input associations properly so fill() doesn't match label
+    spans instead of their associated inputs.
+    """
+    from selenium.webdriver.common.by import By
+
+    escaped = text.replace("'", "\\'")
+
+    # 1. Label text → associated input via `for` attribute
+    try:
+        labels = driver.find_elements(By.XPATH, f"//label[contains(., '{escaped}')]")
+        for label in labels:
+            if not label.is_displayed():
+                continue
+            for_id = label.get_attribute("for")
+            if for_id:
+                try:
+                    inp = driver.find_element(By.ID, for_id)
+                    if inp.is_displayed():
+                        return inp
+                except Exception:
+                    pass
+            # Label wrapping an input directly
+            for tag in ("input", "textarea", "select"):
+                try:
+                    inp = label.find_element(By.TAG_NAME, tag)
+                    if inp.is_displayed():
+                        return inp
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # 2. Input/textarea/select by placeholder, name, id, aria-label
+    for attr in ("placeholder", "name", "id", "aria-label"):
+        for tag in ("input", "textarea", "select"):
+            try:
+                els = driver.find_elements(
+                    By.XPATH,
+                    f"//{tag}[@{attr}[contains(., '{escaped}')]]",
+                )
+                visible = [e for e in els if e.is_displayed()]
+                if visible:
+                    return visible[0]
+            except Exception:
+                continue
+
+    # 3. Any visible input/textarea if only one exists (last resort)
+    try:
+        inputs = driver.find_elements(
+            By.CSS_SELECTOR, "input:not([type=hidden]), textarea, select"
+        )
+        visible = [e for e in inputs if e.is_displayed()]
+        if len(visible) == 1:
+            return visible[0]
+    except Exception:
+        pass
+
+    return None
+
+
 def describe_element(el) -> str:
     """Short human-readable description of an element."""
     tag = el.tag_name

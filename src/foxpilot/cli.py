@@ -28,6 +28,7 @@ from foxpilot.core import (
     extract_styles,
     feedback,
     find_element,
+    find_input_element,
     fullpage_screenshot,
     list_tabs,
     read_page,
@@ -238,7 +239,10 @@ def cmd_click(
             typer.echo(f"✗ no element found matching '{description}'")
             raise typer.Exit(1)
         desc = describe_element(el)
-        el.click()
+        try:
+            el.click()
+        except Exception:
+            driver.execute_script("arguments[0].click();", el)
         time.sleep(0.8)
         typer.echo(feedback(driver, f"✓ clicked {desc}"))
 
@@ -254,17 +258,10 @@ def cmd_fill(
     from selenium.webdriver.common.keys import Keys
 
     with _browser() as driver:
-        el = find_element(driver, description)
+        el = find_input_element(driver, description)
         if not el:
-            # Fallback: first visible input/textarea
-            inputs = driver.find_elements(
-                By.CSS_SELECTOR, "input:not([type=hidden]), textarea"
-            )
-            visible = [e for e in inputs if e.is_displayed()]
-            if not visible:
-                typer.echo(f"✗ no input found for '{description}'")
-                raise typer.Exit(1)
-            el = visible[0]
+            typer.echo(f"✗ no input found for '{description}'")
+            raise typer.Exit(1)
 
         desc = describe_element(el)
         el.clear()
@@ -360,7 +357,8 @@ def cmd_key(
     from selenium.webdriver.common.keys import Keys
 
     KEY_MAP = {
-        "enter": Keys.RETURN, "tab": Keys.TAB, "escape": Keys.ESCAPE,
+        "enter": Keys.RETURN, "return": Keys.RETURN,
+        "tab": Keys.TAB, "escape": Keys.ESCAPE,
         "space": Keys.SPACE, "backspace": Keys.BACKSPACE, "delete": Keys.DELETE,
         "arrowup": Keys.ARROW_UP, "arrowdown": Keys.ARROW_DOWN,
         "arrowleft": Keys.ARROW_LEFT, "arrowright": Keys.ARROW_RIGHT,
@@ -572,6 +570,77 @@ def cmd_record(
         typer.echo(f"✓ recorded: {path} ({n} frames @ {fps}fps, {duration}s)")
         typer.echo(f"  title: {driver.title}")
         typer.echo(f"  url:   {driver.current_url}")
+
+
+# ---------------------------------------------------------------------------
+# Testing / assertion commands
+# ---------------------------------------------------------------------------
+
+@app.command(name="assert")
+def cmd_assert(
+    text: str = typer.Argument(..., help="Text that must be present on the page."),
+    selector: Optional[str] = typer.Option(None, "--in", help="Scope to a CSS selector."),
+    invert: bool = typer.Option(False, "--not", help="Assert text is NOT present."),
+):
+    """Assert page contains (or lacks) text. Exits 1 on failure — use in test scripts."""
+    with _browser() as driver:
+        content = read_page(driver, selector, max_chars=50000)
+        found = text.lower() in content.lower()
+        url = driver.current_url
+
+        if invert:
+            if found:
+                typer.echo(f"✗ ASSERT FAILED: '{text}' was found but should not be present")
+                typer.echo(f"  url: {url}")
+                raise typer.Exit(1)
+            typer.echo(f"✓ ASSERT PASSED: '{text}' not present (as expected)")
+            typer.echo(f"  url: {url}")
+        else:
+            if not found:
+                typer.echo(f"✗ ASSERT FAILED: '{text}' not found on page")
+                typer.echo(f"  url: {url}")
+                raise typer.Exit(1)
+            typer.echo(f"✓ ASSERT PASSED: '{text}' found")
+            typer.echo(f"  url: {url}")
+
+
+@app.command(name="canvas-screenshot")
+def cmd_canvas_screenshot(
+    path: str = typer.Argument("/tmp/foxpilot-canvas.png", help="Output path for PNG."),
+    selector: Optional[str] = typer.Option(None, "--el", help="CSS selector for canvas (default: first canvas)."),
+):
+    """Capture a canvas element's pixels via toDataURL().
+
+    Works for Canvas 2D contexts. WebGL canvases are security-tainted and will
+    fail — WebGL content cannot be read back from JavaScript.
+    """
+    import base64
+    from pathlib import Path as _Path
+
+    out = _Path(path)
+    css = selector or "canvas"
+
+    with _browser() as driver:
+        result = driver.execute_script(f"""
+            const c = document.querySelector({repr(css)});
+            if (!c) return null;
+            try {{ return c.toDataURL('image/png').split(',')[1]; }}
+            catch (e) {{ return 'ERROR:' + e.message; }}
+        """)
+
+        if result is None:
+            typer.echo(f"✗ no canvas found matching '{css}'", err=True)
+            raise typer.Exit(1)
+        if isinstance(result, str) and result.startswith("ERROR:"):
+            typer.echo(f"✗ canvas capture failed: {result[6:]}", err=True)
+            raise typer.Exit(1)
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(base64.b64decode(result))
+        size_kb = out.stat().st_size / 1024
+        typer.echo(f"✓ canvas screenshot: {out} ({size_kb:.0f}KB)")
+        typer.echo(f"  title: {driver.title}")
+        typer.echo(f"  url: {driver.current_url}")
 
 
 # ---------------------------------------------------------------------------
