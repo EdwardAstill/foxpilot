@@ -152,7 +152,58 @@ foxpilot --zen tabs                        # your real Zen
 foxpilot --headless-mode search "query"   # one-shot ephemeral
 ```
 
+### Site branches
+
+Site branches bundle common workflows for high-value websites while still using
+the same browser modes and session handling as the generic commands.
+
+```bash
+foxpilot youtube help
+foxpilot youtube search "rust async tutorial"
+foxpilot youtube open https://www.youtube.com/watch?v=VIDEO_ID
+foxpilot youtube metadata
+foxpilot youtube transcript --format json
+foxpilot page outline
+foxpilot wait selector "main"
+foxpilot expect text "Dashboard"
+foxpilot docs search "pathlib glob" --site python
+foxpilot github repo owner/repo
+foxpilot github explore --topic ai --json
+foxpilot plugins list
+foxpilot evidence bundle /tmp/task-evidence
+foxpilot mission run "download the latest invoice from OneDrive"
+foxpilot qa http://localhost:3000
+foxpilot macro list
+foxpilot onedrive open recent
+foxpilot onedrive download "Budget.xlsx" --dir ~/Downloads
+```
+
+Detailed docs:
+
+- [`foxpilot docs`](docs/commands/docs.md)
+- [`foxpilot evidence`](docs/commands/evidence.md)
+- [`foxpilot github`](docs/commands/github.md)
+- [`foxpilot macro`](docs/commands/macro.md)
+- [`foxpilot mission`](docs/commands/mission.md)
+- [`foxpilot onedrive`](docs/commands/onedrive.md)
+- [`foxpilot page`](docs/commands/page.md)
+- [`foxpilot plugins`](docs/commands/plugins.md)
+- [`foxpilot qa`](docs/commands/qa.md)
+- [`foxpilot wait` / `foxpilot expect`](docs/commands/wait-expect.md)
+- [`foxpilot youtube`](docs/commands/youtube.md)
+
 ### Observation commands
+
+#### `doctor`
+
+Check local browser automation prerequisites and report environment blockers before running browser-backed commands.
+
+```bash
+foxpilot doctor
+foxpilot doctor --fix
+```
+
+Checks include Python, `geckodriver`, Firefox, Zen, local WebDriver socket binding, `hyprctl`, and claude profile path writability. `--fix` performs safe local repairs such as creating the claude profile parent directory before reporting. A failed check exits nonzero.
 
 #### `tabs`
 
@@ -370,6 +421,8 @@ Move the claude Zen window between the active workspace (`show`) and the `specia
 foxpilot show
 foxpilot hide
 ```
+
+If the claude browser is not running, these commands now report that state and exit nonzero instead of pretending a window was moved.
 
 #### `status`
 
@@ -658,6 +711,7 @@ foxpilot css-fill "input[name=email]" "alice@example.com"
 ## MCP Server
 
 foxpilot exposes all its tools as an MCP server for use with Claude Code.
+CLI and MCP wrappers should stay thin: browser behavior lives in shared action helpers so both surfaces behave consistently.
 
 ### Start the server
 

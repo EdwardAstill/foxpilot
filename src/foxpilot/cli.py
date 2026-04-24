@@ -10,11 +10,18 @@ workspace for the duration of the run. Pass --zen to operate on the user's
 own running Zen instance instead.
 """
 
+import json as jsonlib
 import time
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Optional
 
 import typer
 
+from foxpilot.actions import click_action, fill_action
+from foxpilot.evidence import create_evidence_bundle
+from foxpilot.mission import create_mission, load_mission, update_mission_status
+from foxpilot.qa import build_qa_report
 from foxpilot.core import (
     browser,
     burst_screenshots,
@@ -28,7 +35,6 @@ from foxpilot.core import (
     extract_styles,
     feedback,
     find_element,
-    find_input_element,
     fullpage_screenshot,
     list_tabs,
     read_page,
@@ -36,6 +42,21 @@ from foxpilot.core import (
     switch_tab,
     zen_status,
 )
+from foxpilot.sites.youtube import app as youtube_app
+from foxpilot.sites.youtube import set_browser_factory as set_youtube_browser_factory
+from foxpilot.sites.page import app as page_app
+from foxpilot.sites.page import set_browser_factory as set_page_browser_factory
+from foxpilot.sites.wait_expect import expect_app, wait_app
+from foxpilot.sites.wait_expect import set_browser_factory as set_wait_expect_browser_factory
+from foxpilot.sites.docs import app as docs_app
+from foxpilot.sites.docs import set_browser_factory as set_docs_browser_factory
+from foxpilot.sites.github import app as github_app
+from foxpilot.sites.github import set_browser_factory as set_github_browser_factory
+from foxpilot.sites.macro import app as macro_app
+from foxpilot.sites.macro import set_command_prefix_factory as set_macro_command_prefix_factory
+from foxpilot.sites.onedrive import app as onedrive_app
+from foxpilot.sites.onedrive import set_browser_factory as set_onedrive_browser_factory
+from foxpilot.plugins import Plugin, discover_plugins
 
 app = typer.Typer(
     help="foxpilot — Firefox browser automation for AI agents.",
@@ -77,13 +98,294 @@ def _mode(override: str = "") -> str:
 
 
 # Helper so every command can pass the right kwargs through to browser()
+@contextmanager
 def _browser():
+    try:
+        with browser(mode=_MODE, visible=_VISIBLE) as driver:
+            yield driver
+    except RuntimeError as exc:
+        typer.echo(f"x {exc}", err=True)
+        raise typer.Exit(1)
+
+
+def _branch_browser():
     return browser(mode=_MODE, visible=_VISIBLE)
 
 
 def _echo_mapping(data: dict) -> None:
     for key, value in data.items():
         typer.echo(f"{key:<22} {value if value is not None else '-'}")
+
+
+def _macro_command_prefix() -> list[str]:
+    if _MODE == "zen":
+        return ["--zen"]
+    if _MODE == "headless":
+        return ["--headless-mode"]
+    if _VISIBLE:
+        return ["--visible"]
+    return []
+
+
+set_youtube_browser_factory(_browser)
+app.add_typer(
+    youtube_app,
+    name="youtube",
+    help="YouTube search, metadata, transcripts, and playlists.",
+)
+set_page_browser_factory(_browser)
+app.add_typer(
+    page_app,
+    name="page",
+    help="Generic page inspection helpers.",
+)
+set_wait_expect_browser_factory(_browser)
+app.add_typer(
+    wait_app,
+    name="wait",
+    help="Wait for browser state.",
+)
+app.add_typer(
+    expect_app,
+    name="expect",
+    help="Assert current browser state.",
+)
+set_docs_browser_factory(_browser)
+app.add_typer(
+    docs_app,
+    name="docs",
+    help="Documentation search and extraction helpers.",
+)
+set_github_browser_factory(_branch_browser)
+app.add_typer(
+    github_app,
+    name="github",
+    help="GitHub browser helpers.",
+)
+set_macro_command_prefix_factory(_macro_command_prefix)
+app.add_typer(
+    macro_app,
+    name="macro",
+    help="Reusable browser workflow macros.",
+)
+set_onedrive_browser_factory(_branch_browser)
+app.add_typer(
+    onedrive_app,
+    name="onedrive",
+    help="OneDrive Online navigation helpers.",
+)
+
+
+plugins_app = typer.Typer(
+    help="Discover and inspect Foxpilot plugins.",
+    no_args_is_help=True,
+)
+app.add_typer(plugins_app, name="plugins", help="Discover and inspect Foxpilot plugins.")
+
+evidence_app = typer.Typer(
+    help="Capture auditable browser evidence bundles.",
+    no_args_is_help=True,
+)
+app.add_typer(evidence_app, name="evidence", help="Capture auditable browser evidence bundles.")
+
+mission_app = typer.Typer(
+    help="Plan and track multi-step browser missions.",
+    no_args_is_help=True,
+)
+app.add_typer(mission_app, name="mission", help="Plan and track multi-step browser missions.")
+
+
+@plugins_app.command(name="list")
+def cmd_plugins_list(
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show load errors."),
+):
+    """List loaded Foxpilot plugins."""
+    registry = _plugin_registry()
+    plugins = registry.list()
+    if json_output:
+        typer.echo(jsonlib.dumps([_plugin_payload(plugin) for plugin in plugins], indent=2))
+        return
+
+    if not plugins:
+        typer.echo("(no plugins loaded)")
+    for plugin in plugins:
+        typer.echo(f"{plugin.name:<16} {plugin.source:<7} {plugin.help}")
+
+    errors = registry.load_errors()
+    if verbose and errors:
+        typer.echo("\nload errors:")
+        for error in errors:
+            typer.echo(f"  {error.name}: {error.message}")
+
+
+@plugins_app.command(name="info")
+def cmd_plugins_info(
+    name: str = typer.Argument(..., help="Plugin name."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+):
+    """Show metadata for one plugin."""
+    registry = _plugin_registry()
+    plugin = registry.info(name)
+    if plugin is None:
+        error = registry.load_error(name)
+        if error is not None:
+            typer.echo(f"error: plugin '{name}' failed to load: {error.message}", err=True)
+        else:
+            typer.echo(f"error: plugin '{name}' not found", err=True)
+        raise typer.Exit(1)
+
+    payload = _plugin_payload(plugin)
+    if json_output:
+        typer.echo(jsonlib.dumps(payload, indent=2))
+        return
+
+    for key in ("name", "source", "help", "docs", "auth", "modes"):
+        value = payload.get(key)
+        if value not in (None, "", []):
+            typer.echo(f"{key}: {value}")
+
+
+@plugins_app.command(name="path")
+def cmd_plugins_path():
+    """Print plugin search roots."""
+    roots = _plugin_roots()
+    typer.echo(f"builtins: {roots['builtins']}")
+    typer.echo(f"local: {roots['local']}")
+
+
+@plugins_app.command(name="doctor")
+def cmd_plugins_doctor():
+    """Check plugin discovery and report load failures."""
+    registry = _plugin_registry()
+    typer.echo(f"loaded: {len(registry.list())}")
+    errors = registry.load_errors()
+    if not errors:
+        typer.echo("load errors: 0")
+        return
+    typer.echo(f"load errors: {len(errors)}")
+    for error in errors:
+        typer.echo(f"- {error.name} ({error.source}) {error.path}: {error.message}")
+    raise typer.Exit(1)
+
+
+def _plugin_registry():
+    return discover_plugins(project_root=_project_root())
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _plugin_roots() -> dict[str, Path]:
+    root = _project_root()
+    return {
+        "builtins": Path(__file__).resolve().parent / "plugins" / "builtin",
+        "local": root / "plugins",
+    }
+
+
+def _plugin_payload(plugin: Plugin) -> dict[str, object]:
+    return {
+        "name": plugin.name,
+        "source": plugin.source,
+        "help": plugin.help,
+        "docs": str(plugin.docs_path or ""),
+        "auth": plugin.auth_notes or "",
+        "modes": list(plugin.browser_modes),
+    }
+
+
+@evidence_app.command(name="bundle")
+def cmd_evidence_bundle(
+    output_dir: str = typer.Argument(..., help="Directory to write evidence artifacts into."),
+    command: str = typer.Option("", "--command", help="Command name to record in metadata."),
+    plugin: str = typer.Option("", "--plugin", help="Plugin name to record in metadata."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+):
+    """Capture current page URL, text, HTML, screenshot, and metadata."""
+    with _browser() as driver:
+        bundle = create_evidence_bundle(
+            driver,
+            output_dir,
+            command=command,
+            plugin=plugin,
+            mode=_MODE,
+        )
+    if json_output:
+        typer.echo(jsonlib.dumps(bundle, indent=2))
+        return
+    typer.echo(f"bundle: {Path(output_dir) / 'bundle.json'}")
+    typer.echo(f"url: {bundle.get('url', '')}")
+    typer.echo(f"artifacts: {', '.join(bundle.get('artifacts', []))}")
+
+
+@mission_app.command(name="run")
+def cmd_mission_run(
+    task: str = typer.Argument(..., help="Plain-language browser task."),
+    root: Optional[str] = typer.Option(None, "--root", help="Mission state root."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+):
+    """Create a planned mission state file."""
+    from dataclasses import asdict
+
+    state = create_mission(task, root=root)
+    payload = asdict(state)
+    if json_output:
+        typer.echo(jsonlib.dumps(payload, indent=2))
+        return
+    typer.echo(f"mission: {state.mission_id}")
+    typer.echo(f"status: {state.status}")
+    for index, step in enumerate(state.steps, 1):
+        typer.echo(f"{index}. [{step.status}] {step.kind}: {step.description}")
+
+
+@mission_app.command(name="status")
+def cmd_mission_status(
+    mission_id: str = typer.Argument(..., help="Mission id."),
+    root: Optional[str] = typer.Option(None, "--root", help="Mission state root."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+):
+    """Show mission state."""
+    from dataclasses import asdict
+
+    state = load_mission(mission_id, root=root)
+    payload = asdict(state)
+    if json_output:
+        typer.echo(jsonlib.dumps(payload, indent=2))
+        return
+    typer.echo(f"mission: {state.mission_id}")
+    typer.echo(f"task: {state.task}")
+    typer.echo(f"status: {state.status}")
+    for index, step in enumerate(state.steps, 1):
+        typer.echo(f"{index}. [{step.status}] {step.kind}: {step.description}")
+
+
+@mission_app.command(name="cancel")
+def cmd_mission_cancel(
+    mission_id: str = typer.Argument(..., help="Mission id."),
+    root: Optional[str] = typer.Option(None, "--root", help="Mission state root."),
+):
+    """Mark a mission as cancelled."""
+    state = update_mission_status(mission_id, "cancelled", root=root)
+    typer.echo(f"mission: {state.mission_id}")
+    typer.echo("status: cancelled")
+
+
+@app.command(name="qa")
+def cmd_qa(
+    target_url: str = typer.Argument(..., help="URL to inspect."),
+    out: str = typer.Option("/tmp/foxpilot-qa", "--out", "-o", help="Output directory."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+):
+    """Capture a basic visual QA report for a URL."""
+    with _browser() as driver:
+        report = build_qa_report(driver, target_url, out)
+    if json_output:
+        typer.echo(jsonlib.dumps(report, indent=2))
+        return
+    typer.echo(f"report: {Path(out) / 'qa-report.json'}")
+    typer.echo(f"findings: {len(report.get('findings', []))}")
 
 
 # ---------------------------------------------------------------------------
@@ -175,9 +477,9 @@ def cmd_find(
     with _browser() as driver:
         xpaths = [
             f"//*[contains(text(), '{text}')]",
-            f"//*[@aria-label[contains(., '{text}')]]",
-            f"//*[@placeholder[contains(., '{text}')]]",
-            f"//*[@title[contains(., '{text}')]]",
+            f"//*[contains(@aria-label, '{text}')]",
+            f"//*[contains(@placeholder, '{text}')]",
+            f"//*[contains(@title, '{text}')]",
         ]
         seen: set[int] = set()
         results = []
@@ -234,17 +536,10 @@ def cmd_click(
 ):
     """Click an element by visible text."""
     with _browser() as driver:
-        el = find_element(driver, description, role=role, tag=tag)
-        if not el:
-            typer.echo(f"✗ no element found matching '{description}'")
+        result = click_action(driver, description, role=role, tag=tag)
+        typer.echo(result.to_text())
+        if not result.ok:
             raise typer.Exit(1)
-        desc = describe_element(el)
-        try:
-            el.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", el)
-        time.sleep(0.8)
-        typer.echo(feedback(driver, f"✓ clicked {desc}"))
 
 
 @app.command(name="fill")
@@ -254,25 +549,11 @@ def cmd_fill(
     submit: bool = typer.Option(False, "--submit", "-s", help="Press Enter after."),
 ):
     """Fill a text input found by label or placeholder."""
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.common.keys import Keys
-
     with _browser() as driver:
-        el = find_input_element(driver, description)
-        if not el:
-            typer.echo(f"✗ no input found for '{description}'")
+        result = fill_action(driver, description, value, submit=submit)
+        typer.echo(result.to_text())
+        if not result.ok:
             raise typer.Exit(1)
-
-        desc = describe_element(el)
-        el.clear()
-        el.send_keys(value)
-
-        if submit:
-            el.send_keys(Keys.RETURN)
-            time.sleep(0.8)
-            typer.echo(feedback(driver, f"✓ filled {desc} + submitted"))
-        else:
-            typer.echo(feedback(driver, f"✓ filled {desc} with '{value}'"))
 
 
 @app.command(name="select")
@@ -725,6 +1006,23 @@ def cmd_mcp():
     serve()
 
 
+@app.command(name="doctor")
+def cmd_doctor(
+    fix: bool = typer.Option(False, "--fix", help="Apply safe local repairs before reporting."),
+):
+    """Check local Foxpilot browser automation prerequisites."""
+    from foxpilot.doctor import format_diagnostics, run_diagnostics, run_safe_fixes
+
+    if fix:
+        typer.echo("safe fixes:")
+        typer.echo(format_diagnostics(run_safe_fixes()))
+        typer.echo("")
+    report = run_diagnostics()
+    typer.echo(format_diagnostics(report))
+    if any(not item.get("ok") for item in report.values()):
+        raise typer.Exit(1)
+
+
 # ---------------------------------------------------------------------------
 # Claude profile lifecycle (Hyprland scratchpad)
 # ---------------------------------------------------------------------------
@@ -732,15 +1030,29 @@ def cmd_mcp():
 @app.command(name="show")
 def cmd_show():
     """Bring the claude-profile Zen window onto the active workspace."""
-    claude_show()
-    typer.echo("✓ claude window → active workspace")
+    result = claude_show()
+    status = result["status"]
+    if status == "not_running":
+        typer.echo("x claude window not running", err=True)
+        raise typer.Exit(1)
+    if status == "already_visible":
+        typer.echo("OK claude window already visible")
+        return
+    typer.echo("OK claude window -> active workspace")
 
 
 @app.command(name="hide")
 def cmd_hide():
     """Send the claude-profile Zen window to the special:claude scratchpad."""
-    claude_hide()
-    typer.echo("✓ claude window → special:claude")
+    result = claude_hide()
+    status = result["status"]
+    if status == "not_running":
+        typer.echo("x claude window not running", err=True)
+        raise typer.Exit(1)
+    if status == "already_hidden":
+        typer.echo("OK claude window already hidden")
+        return
+    typer.echo("OK claude window -> special:claude")
 
 
 @app.command(name="import-cookies")
@@ -926,3 +1238,7 @@ def _run():
     except RuntimeError as e:
         typer.echo(f"✗ {e}", err=True)
         raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    _run()

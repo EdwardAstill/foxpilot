@@ -1,0 +1,121 @@
+version: 1
+plan:
+  slug: browser-command-foundation
+  prose: docs/plans/2026-04-24-browser-command-foundation.md
+  goal: Make Foxpilot's browser commands reliable, testable, and consistent across CLI and MCP.
+
+nodes:
+  - id: dev_test_tooling
+    type: implement
+    description: Standardize on stdlib unittest command for this pass.
+    files:
+      modify:
+        - docs/plans/2026-04-24-browser-command-foundation.md
+    verify:
+      - ./.venv/bin/python -m unittest discover -s tests -v
+    on_fail: escalate
+
+  - id: shared_result_type
+    type: implement
+    depends_on:
+      - dev_test_tooling
+    description: Add CommandResult and text formatting as the shared command return contract.
+    files:
+      create:
+        - src/foxpilot/results.py
+        - tests/test_results.py
+    verify:
+      - ./.venv/bin/python -m unittest discover -s tests -p 'test_results.py' -v
+    on_fail: retry
+
+  - id: shared_action_layer
+    type: implement
+    depends_on:
+      - shared_result_type
+    description: Extract click and fill into shared action functions used by CLI and MCP.
+    files:
+      create:
+        - src/foxpilot/actions.py
+        - tests/test_actions.py
+      modify:
+        - src/foxpilot/cli.py
+        - src/foxpilot/mcp_server.py
+    verify:
+      - ./.venv/bin/python -m unittest discover -s tests -p 'test_actions.py' -v
+      - ./.venv/bin/python -m unittest discover -s tests -p 'test_youtube_site.py' -v
+    on_fail: retry
+
+  - id: browser_fixture_smoke_tests
+    type: implement
+    depends_on:
+      - shared_action_layer
+    description: Add local HTML fixture browser tests for action behavior without live websites.
+    files:
+      create:
+        - tests/fixtures/browser_form.html
+        - tests/fixtures/browser_content.html
+        - tests/test_browser_smoke.py
+    verify:
+      - ./.venv/bin/python -m unittest discover -s tests -p 'test_browser_smoke.py' -v
+    on_fail: escalate
+
+  - id: doctor_command
+    type: implement
+    depends_on:
+      - dev_test_tooling
+    description: Add environment diagnostics for dependencies, ports, profile writability, and Hyprland.
+    files:
+      create:
+        - src/foxpilot/doctor.py
+        - tests/test_doctor.py
+      modify:
+        - src/foxpilot/cli.py
+    verify:
+      - ./.venv/bin/python -m unittest discover -s tests -p 'test_doctor.py' -v
+      - ./.venv/bin/foxpilot doctor
+    on_fail: retry
+
+  - id: lifecycle_truthfulness
+    type: implement
+    depends_on:
+      - dev_test_tooling
+    description: Make show and hide report changed, already, and not-running states accurately.
+    files:
+      create:
+        - tests/test_lifecycle.py
+      modify:
+        - src/foxpilot/core.py
+        - src/foxpilot/cli.py
+        - src/foxpilot/mcp_server.py
+    verify:
+      - ./.venv/bin/python -m unittest discover -s tests -p 'test_lifecycle.py' -v
+    on_fail: retry
+
+  - id: module_execution
+    type: implement
+    depends_on:
+      - dev_test_tooling
+    description: Make python -m foxpilot.cli --help execute the Typer app.
+    files:
+      create:
+        - tests/test_cli_surface.py
+      modify:
+        - src/foxpilot/cli.py
+    verify:
+      - ./.venv/bin/python -m unittest discover -s tests -p 'test_cli_surface.py' -v
+    on_fail: retry
+
+  - id: final_verification
+    type: verify
+    depends_on:
+      - browser_fixture_smoke_tests
+      - doctor_command
+      - lifecycle_truthfulness
+      - module_execution
+    description: Run the full verification gate for the browser command foundation.
+    verify:
+      - ./.venv/bin/python -m unittest discover -s tests -v
+      - ./.venv/bin/foxpilot --help
+      - ./.venv/bin/foxpilot doctor
+      - ./.venv/bin/foxpilot youtube help
+    on_fail: escalate

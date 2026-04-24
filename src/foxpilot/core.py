@@ -217,15 +217,24 @@ def _hyprctl_move_window(address: str, workspace: str) -> None:
     )
 
 
-def _set_claude_visibility(visible: bool) -> None:
+def _set_claude_visibility(visible: bool) -> dict:
     """Move the claude Zen window onto the active workspace (visible) or into
-    the special:claude scratchpad (hidden). No-op if window not found yet."""
+    the special:claude scratchpad (hidden)."""
     win = _find_claude_window()
     if not win:
-        return
+        return {"status": "not_running", "workspace": None}
     address = win.get("address")
     if not address:
-        return
+        return {"status": "not_running", "workspace": None}
+
+    ws_data = win.get("workspace", {}) or {}
+    current_workspace = ws_data.get("name")
+    currently_visible = not (current_workspace or "").startswith("special:")
+    if visible and currently_visible:
+        return {"status": "already_visible", "workspace": current_workspace}
+    if not visible and not currently_visible:
+        return {"status": "already_hidden", "workspace": current_workspace}
+
     if visible:
         # Move to whatever workspace the user is currently looking at
         import json
@@ -239,8 +248,13 @@ def _set_claude_visibility(visible: bool) -> None:
         except Exception:
             ws = "1"
         _hyprctl_move_window(address, ws)
+        return {"status": "changed", "workspace": ws}
     else:
         _hyprctl_move_window(address, f"special:{CLAUDE_SPECIAL_WORKSPACE}")
+        return {
+            "status": "changed",
+            "workspace": f"special:{CLAUDE_SPECIAL_WORKSPACE}",
+        }
 
 
 def _ensure_claude_user_js() -> None:
@@ -341,14 +355,14 @@ def _get_driver_claude(visible: bool = False):
     return driver
 
 
-def claude_show() -> None:
+def claude_show() -> dict:
     """Bring the claude Zen window onto the active workspace."""
-    _set_claude_visibility(True)
+    return _set_claude_visibility(True)
 
 
-def claude_hide() -> None:
+def claude_hide() -> dict:
     """Send the claude Zen window to the special:claude scratchpad."""
-    _set_claude_visibility(False)
+    return _set_claude_visibility(False)
 
 
 def _detect_main_zen_profile() -> Optional[Path]:
@@ -1094,18 +1108,18 @@ def find_element(driver, text: str, role: Optional[str] = None, tag: Optional[st
     if role:
         candidates += [
             f"//*[@role='{role}'][contains(., '{escaped}')]",
-            f"//*[@role='{role}'][@aria-label[contains(., '{escaped}')]]",
+            f"//*[@role='{role}'][contains(@aria-label, '{escaped}')]",
         ]
     else:
         # Interactive elements take priority
         candidates += [
             f"//button[contains(., '{escaped}')]",
             f"//a[contains(., '{escaped}')]",
-            f"//input[@placeholder[contains(., '{escaped}')]]",
-            f"//textarea[@placeholder[contains(., '{escaped}')]]",
+            f"//input[contains(@placeholder, '{escaped}')]",
+            f"//textarea[contains(@placeholder, '{escaped}')]",
             f"//select[contains(., '{escaped}')]",
-            f"//*[@aria-label[contains(., '{escaped}')]]",
-            f"//*[@title[contains(., '{escaped}')]]",
+            f"//*[contains(@aria-label, '{escaped}')]",
+            f"//*[contains(@title, '{escaped}')]",
             f"//*[contains(text(), '{escaped}')]",
         ]
 

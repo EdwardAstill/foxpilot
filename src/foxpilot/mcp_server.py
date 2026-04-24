@@ -18,11 +18,14 @@ claude profile without performing browser actions.
 Start with: foxpilot mcp
 """
 
+import json as jsonlib
 import time
+from dataclasses import asdict
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from foxpilot.actions import click_action, fill_action
 from foxpilot.core import (
     browser,
     burst_screenshots,
@@ -41,8 +44,80 @@ from foxpilot.core import (
     switch_tab,
 )
 from foxpilot.search import format_results, search_duckduckgo
+from foxpilot.evidence import create_evidence_bundle
+from foxpilot.mission import create_mission
+from foxpilot.page_brain import understand_page
+from foxpilot.plugins import discover_plugins
+from foxpilot.qa import build_qa_report
 
 mcp = FastMCP("foxpilot")
+
+
+@mcp.tool()
+def plugins_list() -> str:
+    """List loaded Foxpilot plugins as JSON."""
+    registry = discover_plugins()
+    return jsonlib.dumps(
+        [
+            {
+                "name": plugin.name,
+                "source": plugin.source,
+                "help": plugin.help,
+                "docs": str(plugin.docs_path or ""),
+                "auth": plugin.auth_notes or "",
+                "modes": list(plugin.browser_modes),
+            }
+            for plugin in registry.list()
+        ],
+        indent=2,
+    )
+
+
+@mcp.tool()
+def evidence_bundle(
+    output_dir: str,
+    command: str = "",
+    plugin: str = "",
+    mode: str = "claude",
+    visible: bool = False,
+) -> str:
+    """Capture current page state into an evidence bundle and return JSON metadata."""
+    with browser(mode=mode, visible=visible) as driver:
+        bundle = create_evidence_bundle(
+            driver,
+            output_dir,
+            command=command,
+            plugin=plugin,
+            mode=mode,
+        )
+    return jsonlib.dumps(bundle, indent=2)
+
+
+@mcp.tool()
+def page_understand(mode: str = "claude", visible: bool = False, limit: int = 100) -> str:
+    """Return an agent-friendly JSON map of the current page."""
+    with browser(mode=mode, visible=visible) as driver:
+        return jsonlib.dumps(understand_page(driver, limit=limit), indent=2)
+
+
+@mcp.tool()
+def mission_run(task: str, root: str = "") -> str:
+    """Create a planned mission state file and return it as JSON."""
+    state = create_mission(task, root=root or None)
+    return jsonlib.dumps(asdict(state), indent=2)
+
+
+@mcp.tool()
+def qa_run(
+    target_url: str,
+    output_dir: str = "/tmp/foxpilot-qa",
+    mode: str = "claude",
+    visible: bool = False,
+) -> str:
+    """Capture a basic visual QA report for a URL and return JSON."""
+    with browser(mode=mode, visible=visible) as driver:
+        report = build_qa_report(driver, target_url, output_dir)
+    return jsonlib.dumps(report, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -141,9 +216,9 @@ def find(text: str, mode: str = "claude", visible: bool = False) -> str:
     with browser(mode=mode, visible=visible) as driver:
         xpaths = [
             f"//*[contains(text(), '{text}')]",
-            f"//*[@aria-label[contains(., '{text}')]]",
-            f"//*[@placeholder[contains(., '{text}')]]",
-            f"//*[@title[contains(., '{text}')]]",
+            f"//*[contains(@aria-label, '{text}')]",
+            f"//*[contains(@placeholder, '{text}')]",
+            f"//*[contains(@title, '{text}')]",
         ]
         seen: set[int] = set()
         results = []
@@ -212,13 +287,12 @@ def click(description: str, role: str = "", tag: str = "", mode: str = "claude",
     Returns what was clicked and current page state.
     """
     with browser(mode=mode, visible=visible) as driver:
-        el = find_element(driver, description, role=role or None, tag=tag or None)
-        if not el:
-            return f"✗ no element found matching '{description}'"
-        desc = describe_element(el)
-        el.click()
-        time.sleep(0.8)
-        return feedback(driver, f"✓ clicked {desc}")
+        return click_action(
+            driver,
+            description,
+            role=role or None,
+            tag=tag or None,
+        ).to_text()
 
 
 @mcp.tool()
@@ -231,29 +305,8 @@ def fill(description: str, value: str, submit: bool = False, mode: str = "claude
         submit: If True, press Enter after filling.
         mode: "headless" or "zen".
     """
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.common.keys import Keys
-
     with browser(mode=mode, visible=visible) as driver:
-        el = find_element(driver, description)
-        if not el:
-            inputs = driver.find_elements(
-                By.CSS_SELECTOR, "input:not([type=hidden]), textarea"
-            )
-            visible = [e for e in inputs if e.is_displayed()]
-            if not visible:
-                return f"✗ no input found for '{description}'"
-            el = visible[0]
-
-        desc = describe_element(el)
-        el.clear()
-        el.send_keys(value)
-
-        if submit:
-            el.send_keys(Keys.RETURN)
-            time.sleep(0.8)
-            return feedback(driver, f"✓ filled {desc} + submitted")
-        return feedback(driver, f"✓ filled {desc} with '{value}'")
+        return fill_action(driver, description, value, submit=submit).to_text()
 
 
 @mcp.tool()
@@ -718,8 +771,13 @@ def show() -> str:
     browser (e.g. they ask to demo a flow, or solve a CAPTCHA). Otherwise
     leave the browser hidden — it works fine off-screen.
     """
-    claude_show()
-    return "✓ claude window → active workspace"
+    result = claude_show()
+    status = result["status"]
+    if status == "not_running":
+        return "x claude window not running"
+    if status == "already_visible":
+        return "OK claude window already visible"
+    return "OK claude window -> active workspace"
 
 
 @mcp.tool()
@@ -728,8 +786,13 @@ def hide() -> str:
 
     Call this after a `show` once the user has seen what they wanted.
     """
-    claude_hide()
-    return "✓ claude window → special:claude (hidden)"
+    result = claude_hide()
+    status = result["status"]
+    if status == "not_running":
+        return "x claude window not running"
+    if status == "already_hidden":
+        return "OK claude window already hidden"
+    return "OK claude window -> special:claude (hidden)"
 
 
 @mcp.tool()
