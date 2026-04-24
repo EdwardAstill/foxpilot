@@ -37,6 +37,26 @@ def extract_main_content(driver) -> str:
 
     # Fallback: full body text
     try:
-        return driver.find_element(By.TAG_NAME, "body").text
+        text = driver.find_element(By.TAG_NAME, "body").text
+        if text and text.strip():
+            return text
+    except Exception:
+        pass
+
+    # Selenium's `.text` can come back blank on reconnect-attached sessions
+    # even when the page clearly has rendered text. Ask the DOM directly as a
+    # final fallback so `read` stays useful on short/static pages.
+    try:
+        text = driver.execute_script(
+            """
+            const body = document.body;
+            if (!body) return "";
+            return (body.innerText || body.textContent || "").trim();
+            """
+        )
+        if isinstance(text, str):
+            return text
     except Exception:
         return ""
+
+    return ""

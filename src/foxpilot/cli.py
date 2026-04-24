@@ -21,6 +21,7 @@ from foxpilot.core import (
     claude_hide,
     claude_show,
     claude_status,
+    doctor_report,
     import_cookies,
     describe_element,
     extract_assets,
@@ -32,6 +33,7 @@ from foxpilot.core import (
     read_page,
     record_video,
     switch_tab,
+    zen_status,
 )
 
 app = typer.Typer(
@@ -76,6 +78,11 @@ def _mode(override: str = "") -> str:
 # Helper so every command can pass the right kwargs through to browser()
 def _browser():
     return browser(mode=_MODE, visible=_VISIBLE)
+
+
+def _echo_mapping(data: dict) -> None:
+    for key, value in data.items():
+        typer.echo(f"{key:<22} {value if value is not None else '-'}")
 
 
 # ---------------------------------------------------------------------------
@@ -710,10 +717,20 @@ def cmd_import_cookies(
 
 @app.command(name="status")
 def cmd_status():
-    """Report claude-profile state — running, visibility, profile dir."""
-    s = claude_status()
-    for k, v in s.items():
-        typer.echo(f"{k:<18} {v}")
+    """Report state for the selected mode."""
+    if _MODE == "zen":
+        report = {"mode": "zen"} | zen_status()
+    elif _MODE == "headless":
+        report = doctor_report("headless")
+    else:
+        report = {"mode": "claude"} | claude_status()
+    _echo_mapping(report)
+
+
+@app.command(name="doctor")
+def cmd_doctor():
+    """Diagnose the selected mode and print next-step guidance."""
+    _echo_mapping(doctor_report(_MODE))
 
 
 @app.command(name="login")
@@ -835,4 +852,8 @@ def _switch_tab(driver, target: str) -> bool:
 
 
 def _run():
-    app()
+    try:
+        app()
+    except RuntimeError as e:
+        typer.echo(f"✗ {e}", err=True)
+        raise SystemExit(1)

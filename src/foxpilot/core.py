@@ -22,14 +22,60 @@ CLAUDE_PROFILE_DIR = Path.home() / ".local/share/foxpilot/claude-profile"
 ZEN_BINARY = "zen-browser"
 
 
-def _marionette_listening() -> bool:
-    """Return True if something is accepting connections on the Marionette port."""
+def _socket_access_error(target: str) -> RuntimeError:
+    return RuntimeError(
+        "Local TCP sockets are blocked in this environment, so foxpilot can't "
+        f"talk to {target}. Re-run foxpilot outside the sandbox or with "
+        "escalated permissions."
+    )
+
+
+def _tcp_port_listening(port: int, target: str) -> bool:
     import socket
+
     try:
-        with socket.create_connection(("127.0.0.1", MARIONETTE_PORT), timeout=1):
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
             return True
+    except PermissionError as e:
+        raise _socket_access_error(target) from e
     except OSError:
         return False
+
+
+def _ensure_local_socket_access(target: str) -> None:
+    import socket
+
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.close()
+    except PermissionError as e:
+        raise _socket_access_error(target) from e
+
+
+def _spawn_detached(argv: list[str], env: dict[str, str]) -> None:
+    """Launch a long-lived browser process detached from the invoking CLI.
+
+    foxpilot commands are one-shot processes. If Zen inherits the command's
+    session/stdio, it can die as soon as the Python process exits. Start it in
+    its own session with stdio disconnected so the browser survives across
+    separate foxpilot invocations.
+    """
+    import subprocess
+
+    subprocess.Popen(
+        argv,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
+def _marionette_listening() -> bool:
+    """Return True if something is accepting connections on the Marionette port."""
+    return _tcp_port_listening(MARIONETTE_PORT, f"Zen Marionette on port {MARIONETTE_PORT}")
 
 
 def _zen_running() -> bool:
@@ -41,7 +87,6 @@ def _zen_running() -> bool:
 
 def _launch_zen_with_marionette() -> None:
     """Launch Zen in the background with --marionette and wait for port."""
-    import subprocess
     import time
     import os
 
@@ -49,12 +94,7 @@ def _launch_zen_with_marionette() -> None:
     if "DISPLAY" not in env:
         env["DISPLAY"] = ":0"
 
-    subprocess.Popen(
-        [ZEN_BINARY, "--marionette"],
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    _spawn_detached([ZEN_BINARY, "--marionette"], env)
     # Wait up to 10s for Marionette to come up
     for _ in range(20):
         time.sleep(0.5)
@@ -67,7 +107,9 @@ def _get_driver_zen():
     """Connect to running Zen via geckodriver --connect-existing.
 
     If Zen is not running, launches it automatically with --marionette.
-    If Zen is running but Marionette is not listening, raises a clear error.
+    If Zen is running but Marionette is not listening, fail loudly without
+    restarting the user's browser. Auto-restarting a real session is intrusive
+    and can trigger session-restore window churn.
     """
     import time
     from selenium import webdriver
@@ -76,11 +118,15 @@ def _get_driver_zen():
 
     if not _marionette_listening():
         if _zen_running():
-            # Zen running without Marionette — kill and relaunch with it
-            # Zen saves session on exit and restores tabs on next launch
-            import subprocess
-            subprocess.run(["pkill", "zen-bin"], check=False)
-            time.sleep(2)
+            raise RuntimeError(
+                "Zen is already running but Marionette is not enabled. "
+                "foxpilot will not restart your real browser automatically. "
+                "If you need this exact live window, switch to desktop "
+                "automation / computer-control. If you only need the login "
+                "state, use claude mode plus import-cookies. Restart Zen "
+                "yourself with --marionette only if you specifically need "
+                "foxpilot --zen."
+            )
         _launch_zen_with_marionette()
         time.sleep(1)  # give geckodriver a moment after port opens
 
@@ -109,17 +155,32 @@ def _get_driver_zen():
     return driver
 
 
+def _close_driver(driver, mode: str) -> None:
+    """Tear down WebDriver state without needlessly killing persistent browsers."""
+    if mode == "headless":
+        driver.quit()
+        return
+
+    # For connect-existing claude/zen sessions, stop the geckodriver sidecar
+    # but leave the browser itself running. This is especially important for
+    # `--zen`, which attaches to the user's real browser session.
+    service = getattr(driver, "service", None)
+    if service is not None:
+        try:
+            service.stop()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Claude mode — dedicated Zen profile, hidden by default via Hyprland
 # ---------------------------------------------------------------------------
 
 def _claude_marionette_listening() -> bool:
-    import socket
-    try:
-        with socket.create_connection(("127.0.0.1", CLAUDE_MARIONETTE_PORT), timeout=1):
-            return True
-    except OSError:
-        return False
+    return _tcp_port_listening(
+        CLAUDE_MARIONETTE_PORT,
+        f"the claude Marionette bridge on port {CLAUDE_MARIONETTE_PORT}",
+    )
 
 
 def _hyprctl_clients() -> list:
@@ -202,7 +263,6 @@ def _launch_claude_zen() -> None:
     separate marionette port, with a custom WM class so Hyprland can target it.
     """
     import os
-    import subprocess
     import time
 
     CLAUDE_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
@@ -212,7 +272,7 @@ def _launch_claude_zen() -> None:
     if "DISPLAY" not in env:
         env["DISPLAY"] = ":0"
 
-    subprocess.Popen(
+    _spawn_detached(
         [
             ZEN_BINARY,
             "--no-remote",
@@ -222,8 +282,6 @@ def _launch_claude_zen() -> None:
             "--marionette",
         ],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
     for _ in range(20):
         time.sleep(0.5)
@@ -489,20 +547,157 @@ def claude_status() -> dict:
         ws = win.get("workspace", {}) or {}
         workspace = ws.get("name")
         visible = not (workspace or "").startswith("special:")
+    socket_error = None
+    running = None
+    try:
+        running = _claude_marionette_listening()
+    except RuntimeError as exc:
+        socket_error = str(exc)
     return {
-        "running": _claude_marionette_listening(),
+        "running": running,
         "window_present": win is not None,
         "visible": visible,
         "workspace": workspace,
         "profile_dir": str(CLAUDE_PROFILE_DIR),
         "marionette_port": CLAUDE_MARIONETTE_PORT,
+        "socket_access": socket_error is None,
+        "socket_error": socket_error,
     }
+
+
+def zen_status() -> dict:
+    """Report real Zen state — process presence, Marionette reachability."""
+    socket_error = None
+    marionette_ready = None
+    try:
+        marionette_ready = _marionette_listening()
+    except RuntimeError as exc:
+        socket_error = str(exc)
+    return {
+        "running": _zen_running(),
+        "marionette_ready": marionette_ready,
+        "marionette_port": MARIONETTE_PORT,
+        "socket_access": socket_error is None,
+        "socket_error": socket_error,
+    }
+
+
+def doctor_report(mode: str = "claude") -> dict:
+    """Return a mode-aware diagnostic report with next-step guidance."""
+    if mode == "zen":
+        zen = zen_status()
+        report = {
+            "mode": "zen",
+            "zen_running": zen["running"],
+            "zen_marionette_ready": zen["marionette_ready"],
+            "marionette_port": zen["marionette_port"],
+            "socket_access": zen["socket_access"],
+        }
+        if zen["socket_error"]:
+            report["socket_error"] = zen["socket_error"]
+        if not zen["socket_access"]:
+            report.update(
+                status="blocked",
+                summary="foxpilot cannot reach local browser sockets from this environment.",
+                next_step="Run foxpilot outside the sandbox, then retry the same --zen command.",
+                fallback="If the visible on-screen browser matters, hand off to desktop automation / computer-control.",
+            )
+        elif zen["marionette_ready"]:
+            report.update(
+                status="ready",
+                summary="Your real Zen session is attachable right now.",
+                next_step="Run foxpilot --zen <command>.",
+                fallback="Use default claude mode instead if you do not need the exact live window.",
+            )
+        elif zen["running"]:
+            report.update(
+                status="needs_marionette",
+                summary="Your real Zen browser is open, but Marionette is off, so foxpilot cannot attach.",
+                next_step="Restart Zen with --marionette only if you need this exact live session.",
+                fallback="Otherwise use claude mode with import-cookies, or hand off to desktop automation / computer-control for the visible window.",
+            )
+        else:
+            report.update(
+                status="launchable",
+                summary="Real Zen is not running; foxpilot can launch it with Marionette for you.",
+                next_step="Run foxpilot --zen <command>.",
+                fallback="Use default claude mode if you want an isolated browser instead of your real session.",
+            )
+        return report
+
+    if mode == "headless":
+        socket_error = None
+        try:
+            _ensure_local_socket_access("headless Firefox via geckodriver")
+        except RuntimeError as exc:
+            socket_error = str(exc)
+        report = {
+            "mode": "headless",
+            "socket_access": socket_error is None,
+        }
+        if socket_error:
+            report["socket_error"] = socket_error
+            report.update(
+                status="blocked",
+                summary="headless Firefox cannot launch from this environment.",
+                next_step="Run foxpilot outside the sandbox, then retry.",
+                fallback="If you need the browser already on screen, use desktop automation / computer-control.",
+            )
+        else:
+            report.update(
+                status="ready",
+                summary="Headless Firefox should be launchable.",
+                next_step="Run foxpilot --headless-mode <command>.",
+                fallback="Switch to claude mode if you need a persistent authenticated session.",
+            )
+        return report
+
+    claude = claude_status()
+    zen = zen_status()
+    report = {
+        "mode": "claude",
+        "claude_running": claude["running"],
+        "window_present": claude["window_present"],
+        "visible": claude["visible"],
+        "workspace": claude["workspace"],
+        "profile_dir": claude["profile_dir"],
+        "marionette_port": claude["marionette_port"],
+        "socket_access": claude["socket_access"],
+        "real_zen_running": zen["running"],
+        "real_zen_marionette_ready": zen["marionette_ready"],
+    }
+    if claude["socket_error"]:
+        report["socket_error"] = claude["socket_error"]
+    if not claude["socket_access"]:
+        report.update(
+            status="blocked",
+            summary="foxpilot cannot reach the claude-profile browser from this environment.",
+            next_step="Run foxpilot outside the sandbox, then retry.",
+            fallback="If you need the visible on-screen browser right now, hand off to desktop automation / computer-control.",
+        )
+    elif claude["running"]:
+        report.update(
+            status="ready",
+            summary="The dedicated claude browser is already up and reachable.",
+            next_step="Run foxpilot <command>.",
+            fallback="Use --zen only when you explicitly need the user's exact live session.",
+        )
+    else:
+        report.update(
+            status="launchable",
+            summary="The dedicated claude browser is not running yet, but foxpilot can launch it automatically.",
+            next_step="Run foxpilot <command>; it will start the claude profile for you.",
+            fallback="Use --zen only for the user's real session, or desktop automation / computer-control if the exact visible window matters.",
+        )
+    return report
 
 
 def _get_driver_headless():
     """Launch a headless Firefox instance."""
     from selenium import webdriver
     from selenium.webdriver.firefox.options import Options
+
+    _ensure_local_socket_access("headless Firefox via geckodriver")
 
     opts = Options()
     opts.add_argument("--headless")
@@ -537,7 +732,7 @@ def browser(mode: str = "claude", visible: bool = False):
     finally:
         if driver:
             try:
-                driver.quit()
+                _close_driver(driver, mode)
             except Exception:
                 pass
 
@@ -593,7 +788,7 @@ def list_tabs() -> list[dict]:
         return tabs
     finally:
         try:
-            driver.quit()
+            _close_driver(driver, "zen")
         except Exception:
             pass
 
@@ -605,7 +800,7 @@ def activate_tab(tab_id: str) -> None:
         driver.switch_to.window(tab_id)
     finally:
         try:
-            driver.quit()
+            _close_driver(driver, "zen")
         except Exception:
             pass
 
@@ -656,7 +851,7 @@ def switch_tab(target: str) -> dict:
         return target_tab
     finally:
         try:
-            driver.quit()
+            _close_driver(driver, "zen")
         except Exception:
             pass
 

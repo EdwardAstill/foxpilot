@@ -85,7 +85,8 @@ Cookies persist in `~/.local/share/foxpilot/claude-profile` regardless of which 
 ```bash
 foxpilot show       # bring claude Zen onto active workspace
 foxpilot hide       # send it back to special:claude
-foxpilot status     # show running / window present / visibility / port
+foxpilot status     # show state for the current mode
+foxpilot doctor     # explain what to do next if the current mode is not usable
 ```
 
 You can also call `hyprctl dispatch togglespecialworkspace claude` directly — the special workspace is a normal Hyprland scratchpad, so all the usual keybinds work.
@@ -97,16 +98,33 @@ foxpilot connects to Zen via the [Marionette](https://firefox-source-docs.mozill
 foxpilot handles this automatically. When you run any `--zen` command:
 
 1. **Marionette already listening** → connects immediately, no disruption
-2. **Zen running without Marionette** → kills Zen, relaunches it with `--marionette`, reconnects. Zen's built-in session restore brings your tabs back.
+2. **Zen running without Marionette** → fails with a clear error. foxpilot does **not** auto-restart your real browser anymore, because that can trigger session-restore window churn or multiple restored windows.
 3. **Zen not running at all** → launches Zen with `--marionette` in the background, waits for it to start, then connects
 
-In practice this means `foxpilot --zen <anything>` just works — no manual setup, no wrapper scripts.
+In practice:
+
+- `foxpilot --zen <anything>` works immediately if your Zen already has Marionette.
+- if Zen is not running, foxpilot can launch it for you
+- if Zen is already running without Marionette, foxpilot leaves it alone and tells you what to do
+
+Before you ask an agent to use your real live browser session, run:
+
+```bash
+foxpilot --zen doctor
+```
+
+That prints the exact attach state plus the recommended fallback:
+
+- `status=ready` → proceed with `foxpilot --zen ...`
+- `status=needs_marionette` → either restart Zen with `--marionette`, or switch to the dedicated claude profile / desktop automation
+- `status=blocked` → the environment cannot reach local browser sockets; run foxpilot outside the sandbox or hand off to desktop automation
 
 ### Why `zen-browser --marionette` and not just `zen-browser`
 
 The `zen-browser` CLI script is a thin wrapper: `exec /opt/zen-browser-bin/zen-bin "$@"`. It does not read or apply flags from the `.desktop` entry. Marionette must be passed explicitly on the command line at launch time — Firefox does not support enabling it on a running process.
 
-foxpilot handles this by detecting the port state and managing the relaunch itself, so you never need to think about it.
+foxpilot handles this by detecting the port state. It will launch Zen when needed,
+but it will not forcibly restart your already-running real browser.
 
 ---
 
@@ -355,16 +373,41 @@ foxpilot hide
 
 #### `status`
 
-Report whether the claude profile is running, where its window lives, and which port it's on.
+Report state for the selected mode.
 
 ```bash
 foxpilot status
+# mode               claude
 # running            True
 # window_present     True
 # visible            False
 # workspace          special:claude
 # profile_dir        /home/you/.local/share/foxpilot/claude-profile
 # marionette_port    2829
+
+foxpilot --zen status
+# mode               zen
+# running            True
+# marionette_ready   False
+# marionette_port    2828
+# socket_access      True
+```
+
+`foxpilot --zen status` reports the real Zen session. It no longer echoes the
+claude-profile state by mistake.
+
+#### `doctor`
+
+Diagnose the selected mode and print the next action plus the best fallback.
+
+```bash
+foxpilot doctor
+foxpilot --zen doctor
+# mode               zen
+# status             needs_marionette
+# summary            Your real Zen browser is open, but Marionette is off, so foxpilot cannot attach.
+# next_step          Restart Zen with --marionette only if you need this exact live session.
+# fallback           Otherwise use claude mode with import-cookies, or hand off to desktop automation / computer-control for the visible window.
 ```
 
 #### `import-cookies [--from PATH] [--domain SUB] [--include-storage] [--include-passwords]`
@@ -757,11 +800,16 @@ Tracked in [#1](https://github.com/EdwardAstill/foxpilot/issues/1). A `--url` fl
 
 ### Tab titles missing on fresh Zen session
 
-After foxpilot auto-restarts Zen, `foxpilot --zen tabs` may show blank titles for tabs that haven't finished loading yet. Wait a few seconds and run again — titles populate as Zen's session restore completes.
+After foxpilot launches Zen itself, `foxpilot --zen tabs` may show blank titles
+for tabs that haven't finished loading yet. Wait a few seconds and run again —
+titles populate as Zen's session restore completes.
 
 ### Zen session restore timing
 
-When foxpilot kills and relaunches Zen to enable Marionette, Zen's session restore runs asynchronously. The relaunch is considered ready when the Marionette port opens (up to 10s), but tabs may still be loading. Commands issued immediately after a cold restart may land on `about:blank` rather than the restored tab.
+When foxpilot launches a fresh Zen with Marionette, session restore runs
+asynchronously. The browser is considered ready when the Marionette port opens
+(up to 10s), but tabs may still be loading. Commands issued immediately after a
+cold launch may land on `about:blank` rather than the restored tab.
 
 ---
 
