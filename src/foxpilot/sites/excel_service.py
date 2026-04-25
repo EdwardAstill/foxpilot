@@ -125,6 +125,118 @@ def goto_cell(driver, cell: str) -> None:
     name_box.send_keys(Keys.ENTER)
 
 
+NUMBER_FORMAT_SHORTCUTS = {
+    "general": "~",
+    "number": "1",
+    "time": "2",
+    "date": "3",
+    "currency": "4",
+    "percent": "5",
+}
+
+ALIGN_SHORTCUTS = {
+    "left": "l",
+    "center": "e",
+    "right": "r",
+}
+
+
+def normalize_number_format(kind: str) -> str:
+    cleaned = (kind or "").strip().lower()
+    if cleaned not in NUMBER_FORMAT_SHORTCUTS:
+        raise ValueError(
+            f"unknown number format: {kind!r} "
+            f"(expected one of: {', '.join(sorted(NUMBER_FORMAT_SHORTCUTS))})"
+        )
+    return cleaned
+
+
+def normalize_alignment(value: str) -> str:
+    cleaned = (value or "").strip().lower()
+    if cleaned not in ALIGN_SHORTCUTS:
+        raise ValueError(
+            f"unknown alignment: {value!r} (expected: left, center, right)"
+        )
+    return cleaned
+
+
+def apply_toggle_format(driver, range_ref: str, key: str) -> dict[str, Any]:
+    """Select a range and fire a Ctrl+<key> keystroke (e.g. b/i/u)."""
+    ref = normalize_cell_ref(range_ref)
+    goto_cell(driver, ref)
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.common.keys import Keys
+    ActionChains(driver).key_down(Keys.CONTROL).send_keys(key).key_up(Keys.CONTROL).perform()
+    return {"range": ref, "format": _format_label_for(key)}
+
+
+def apply_number_format(driver, range_ref: str, kind: str) -> dict[str, Any]:
+    """Select a range and fire Ctrl+Shift+<key> for the requested number format."""
+    cleaned = normalize_number_format(kind)
+    ref = normalize_cell_ref(range_ref)
+    goto_cell(driver, ref)
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.common.keys import Keys
+    key = NUMBER_FORMAT_SHORTCUTS[cleaned]
+    actions = ActionChains(driver)
+    actions.key_down(Keys.CONTROL).key_down(Keys.SHIFT).send_keys(key)
+    actions.key_up(Keys.SHIFT).key_up(Keys.CONTROL).perform()
+    return {"range": ref, "format": cleaned}
+
+
+def apply_alignment(driver, range_ref: str, alignment: str) -> dict[str, Any]:
+    """Select a range and click the matching ribbon alignment button (best effort)."""
+    cleaned = normalize_alignment(alignment)
+    ref = normalize_cell_ref(range_ref)
+    goto_cell(driver, ref)
+    if not _click_ribbon_button(driver, [
+        f"button[aria-label='Align {cleaned.capitalize()}']",
+        f"button[aria-label*='Align {cleaned.capitalize()}']",
+        f"[role='menuitemradio'][aria-label*='Align {cleaned.capitalize()}']",
+        f"[data-icon-name='Align{cleaned.capitalize()}']",
+    ]):
+        raise RuntimeError(
+            f"could not find the {cleaned!r} alignment ribbon button "
+            "(Excel Online ribbon DOM may have changed)"
+        )
+    return {"range": ref, "alignment": cleaned}
+
+
+def clear_format(driver, range_ref: str) -> dict[str, Any]:
+    """Select a range and click ribbon Clear > Clear Formats (best effort)."""
+    ref = normalize_cell_ref(range_ref)
+    goto_cell(driver, ref)
+    if not _click_ribbon_button(driver, [
+        "button[aria-label='Clear Formats']",
+        "button[aria-label*='Clear Formats']",
+        "[role='menuitem'][aria-label*='Clear Formats']",
+    ]):
+        raise RuntimeError(
+            "could not find the 'Clear Formats' ribbon button "
+            "(may need to open Home > Clear menu first)"
+        )
+    return {"range": ref}
+
+
+def _format_label_for(key: str) -> str:
+    return {"b": "bold", "i": "italic", "u": "underline"}.get(key.lower(), key)
+
+
+def _click_ribbon_button(driver, selectors: list[str]) -> bool:
+    from selenium.webdriver.common.by import By
+    for selector in selectors:
+        try:
+            elem = driver.find_element(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        try:
+            elem.click()
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def select_range(driver, cells: str) -> str:
     """Select a cell or range via the Name Box. Returns normalized ref."""
     ref = normalize_cell_ref(cells)
@@ -303,8 +415,14 @@ def _find_all(driver, by, selector):
 
 
 __all__ = [
+    "ALIGN_SHORTCUTS",
     "EXCEL_HOME",
     "EXCEL_HOST",
+    "NUMBER_FORMAT_SHORTCUTS",
+    "apply_alignment",
+    "apply_number_format",
+    "apply_toggle_format",
+    "clear_format",
     "create_blank_workbook",
     "define_name",
     "extract_active_cell",
@@ -318,8 +436,10 @@ __all__ = [
     "home_url",
     "is_excel_url",
     "list_defined_names",
+    "normalize_alignment",
     "normalize_cell_ref",
     "normalize_defined_name",
+    "normalize_number_format",
     "select_range",
     "write_cell",
 ]

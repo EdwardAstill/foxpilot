@@ -12,6 +12,10 @@ import typer
 from foxpilot.core import browser
 from foxpilot.sites.excel_service import (
     EXCEL_HOME,
+    apply_alignment,
+    apply_number_format,
+    apply_toggle_format,
+    clear_format,
     create_blank_workbook,
     define_name,
     extract_active_cell,
@@ -24,8 +28,10 @@ from foxpilot.sites.excel_service import (
     goto_cell,
     is_excel_url,
     list_defined_names,
+    normalize_alignment,
     normalize_cell_ref,
     normalize_defined_name,
+    normalize_number_format,
     select_range,
     write_cell,
 )
@@ -78,6 +84,15 @@ Common commands:
   foxpilot excel name B2:B20 Revenue        # define a named range
   foxpilot excel names                      # list defined names
   foxpilot excel active                     # report current active cell
+
+Formatting:
+  foxpilot excel bold A1:A5                 # toggle bold (Ctrl+B)
+  foxpilot excel italic A1                  # toggle italic (Ctrl+I)
+  foxpilot excel underline A1               # toggle underline (Ctrl+U)
+  foxpilot excel number-format B2:B20 currency
+  foxpilot excel number-format B2:B20 percent
+  foxpilot excel align A1:C5 center         # ribbon-based, best effort
+  foxpilot excel clear-format A1:Z100       # ribbon-based, best effort
 
 Notes:
   Excel Online renders cells on a canvas, so reads/writes go through the
@@ -287,6 +302,127 @@ def cmd_names(
             json_output,
             lambda items: "\n".join(n["name"] for n in items) if items else "(no defined names found)",
         )
+
+
+@app.command(name="bold")
+def cmd_bold(
+    range_ref: str = typer.Argument(..., help="Cell or range, e.g. A1 or A1:C5."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+) -> None:
+    """Toggle bold on a range (Ctrl+B)."""
+    try:
+        ref = normalize_cell_ref(range_ref)
+    except ValueError as exc:
+        _exit_error(str(exc))
+    with _site_browser() as driver:
+        try:
+            data = apply_toggle_format(driver, ref, "b")
+        except RuntimeError as exc:
+            _exit_error(str(exc))
+        _emit(data, json_output, lambda d: f"toggled bold on {d['range']}")
+
+
+@app.command(name="italic")
+def cmd_italic(
+    range_ref: str = typer.Argument(..., help="Cell or range."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+) -> None:
+    """Toggle italic on a range (Ctrl+I)."""
+    try:
+        ref = normalize_cell_ref(range_ref)
+    except ValueError as exc:
+        _exit_error(str(exc))
+    with _site_browser() as driver:
+        try:
+            data = apply_toggle_format(driver, ref, "i")
+        except RuntimeError as exc:
+            _exit_error(str(exc))
+        _emit(data, json_output, lambda d: f"toggled italic on {d['range']}")
+
+
+@app.command(name="underline")
+def cmd_underline(
+    range_ref: str = typer.Argument(..., help="Cell or range."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+) -> None:
+    """Toggle underline on a range (Ctrl+U)."""
+    try:
+        ref = normalize_cell_ref(range_ref)
+    except ValueError as exc:
+        _exit_error(str(exc))
+    with _site_browser() as driver:
+        try:
+            data = apply_toggle_format(driver, ref, "u")
+        except RuntimeError as exc:
+            _exit_error(str(exc))
+        _emit(data, json_output, lambda d: f"toggled underline on {d['range']}")
+
+
+@app.command(name="number-format")
+def cmd_number_format(
+    range_ref: str = typer.Argument(..., help="Cell or range."),
+    kind: str = typer.Argument(
+        ...,
+        help="Format kind: number, currency, percent, date, time, general.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+) -> None:
+    """Apply a number format via Ctrl+Shift shortcut."""
+    try:
+        ref = normalize_cell_ref(range_ref)
+        cleaned = normalize_number_format(kind)
+    except ValueError as exc:
+        _exit_error(str(exc))
+    with _site_browser() as driver:
+        try:
+            data = apply_number_format(driver, ref, cleaned)
+        except (RuntimeError, ValueError) as exc:
+            _exit_error(str(exc))
+        _emit(data, json_output, lambda d: f"applied {d['format']} format to {d['range']}")
+
+
+@app.command(name="align")
+def cmd_align(
+    range_ref: str = typer.Argument(..., help="Cell or range."),
+    alignment: str = typer.Argument(..., help="Alignment: left, center, right."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+) -> None:
+    """Set horizontal alignment via the ribbon (best effort)."""
+    try:
+        ref = normalize_cell_ref(range_ref)
+        cleaned = normalize_alignment(alignment)
+    except ValueError as exc:
+        _exit_error(str(exc))
+    with _site_browser() as driver:
+        try:
+            data = apply_alignment(driver, ref, cleaned)
+        except (RuntimeError, ValueError) as exc:
+            _exit_error(
+                str(exc),
+                next_step="run `foxpilot --visible excel align ...` to inspect the Home ribbon",
+            )
+        _emit(data, json_output, lambda d: f"aligned {d['range']} {d['alignment']}")
+
+
+@app.command(name="clear-format")
+def cmd_clear_format(
+    range_ref: str = typer.Argument(..., help="Cell or range."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+) -> None:
+    """Clear formatting on a range via the ribbon (best effort)."""
+    try:
+        ref = normalize_cell_ref(range_ref)
+    except ValueError as exc:
+        _exit_error(str(exc))
+    with _site_browser() as driver:
+        try:
+            data = clear_format(driver, ref)
+        except RuntimeError as exc:
+            _exit_error(
+                str(exc),
+                next_step="open Home > Clear menu manually then re-run; the menu may need to be expanded first",
+            )
+        _emit(data, json_output, lambda d: f"cleared formatting on {d['range']}")
 
 
 @app.command(name="write")

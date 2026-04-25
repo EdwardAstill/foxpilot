@@ -62,6 +62,10 @@ List recent stream items with title, course, kind, timestamp, and link.
 ### `foxpilot lms courses [--json]`
 List enrolled courses with title, code, term, and link.
 
+Two-source extraction:
+1. Primary: `/ultra/course` cards via stable `data-testid` / class hooks.
+2. Fallback: when primary returns empty (Blackboard renders cards with `data-course-id=""` and aria-label `More info for undefined` for unreleased / "course-converting" enrolments), the plugin navigates to `/ultra/messages` and parses thread headers like `ID: GENG5514_SEM-1_2026`. Results from this path carry `"source": "messages"` and an empty `url` field.
+
 ### `foxpilot lms course <id-or-name>`
 Open a course landing page. Match is case-insensitive substring against title or code.
 

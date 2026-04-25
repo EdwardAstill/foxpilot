@@ -241,7 +241,19 @@ def extract_stream_items(driver, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def extract_courses(driver) -> list[dict[str, Any]]:
-    """Pull enrolled course cards from /ultra/course. Best-effort."""
+    """Pull enrolled course cards from /ultra/course. Best-effort.
+
+    Blackboard Ultra renders course cards with an AngularJS directive whose
+    data binding sometimes resolves to empty strings on the client (cards show
+    "More info for undefined" and `data-course-id=""`). When the cards-on-page
+    extraction returns nothing, fall back to navigating to /ultra/messages
+    and scraping the per-course thread headers, which carry the unit code +
+    title in a stable text format like:
+
+        ID: GENG5514_SEM-1_2026
+        & GENG5511_SEM-1_2026 Engineering Research Project Part 1 SEM-1 2026
+        Finite Element Method SEM-1 2026
+    """
     courses: list[dict[str, Any]] = []
     for node in _find_course_cards(driver):
         title = _node_text(node, "[data-testid='course-title'], .course-title, h3, h4")
@@ -251,6 +263,88 @@ def extract_courses(driver) -> list[dict[str, Any]]:
         if not (title or code):
             continue
         courses.append({"title": title, "code": code, "term": term, "url": url})
+    if courses:
+        return courses
+    return _extract_courses_from_messages(driver)
+
+
+def _extract_courses_from_messages(driver) -> list[dict[str, Any]]:
+    """Fallback: parse /ultra/messages thread headers for unit codes + titles."""
+    import re
+    current = (driver.current_url or "").rstrip("/")
+    if not current.endswith("/ultra/messages"):
+        try:
+            driver.get("https://lms.uwa.edu.au/ultra/messages")
+        except Exception:
+            return []
+
+    text = ""
+    try:
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        def _has_ids(d) -> bool:
+            try:
+                body = d.execute_script("return document.body.innerText || '';") or ""
+            except Exception:
+                return False
+            return "ID:" in body
+
+        WebDriverWait(driver, 15).until(_has_ids)
+        text = driver.execute_script("return document.body.innerText || '';") or ""
+    except Exception:
+        try:
+            text = driver.execute_script("return document.body.innerText || '';") or ""
+        except Exception:
+            return []
+    if "ID:" not in text:
+        return []
+
+    courses: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    id_re = re.compile(r"ID:\s*([A-Z]{3,5}\d{3,5}(?:_[A-Z0-9-]+)+)")
+    lines = [line.rstrip() for line in text.splitlines()]
+    for idx, line in enumerate(lines):
+        match = id_re.search(line)
+        if not match:
+            continue
+        raw_id = match.group(1)
+        unit_code = raw_id.split("_", 1)[0]
+        if unit_code in seen:
+            continue
+        seen.add(unit_code)
+        term = ""
+        title = ""
+        # Look ahead for sibling code (combined offerings) and title line.
+        ahead = lines[idx + 1 : idx + 4]
+        for sibling in ahead:
+            if "_" in sibling and "SEM" in sibling and not title:
+                # Combined-offering header like:
+                # "& GENG5511_SEM-1_2026 Engineering Research Project Part 1 SEM-1 2026"
+                stripped = sibling.lstrip("& ").strip()
+                # Drop leading sibling code, keep title up to trailing term.
+                pieces = stripped.split(" ", 1)
+                title_candidate = pieces[1] if len(pieces) == 2 else stripped
+                title_candidate = re.sub(
+                    r"\s+SEM-\d(?:[A-Z]+)?[\s_-]\d{4}\s*$", "", title_candidate
+                ).strip()
+                if title_candidate:
+                    title = title_candidate
+            elif sibling and not title and "unread" not in sibling.lower():
+                title = re.sub(
+                    r"\s+SEM-\d(?:[A-Z]+)?[\s_-]\d{4}\s*$", "", sibling
+                ).strip()
+        term_match = re.search(r"SEM-\d(?:[A-Z]+)?[\s_-]\d{4}", raw_id)
+        if term_match:
+            term = term_match.group(0).replace("_", "-").replace(" ", "-")
+        courses.append(
+            {
+                "title": title,
+                "code": unit_code,
+                "term": term,
+                "url": "",
+                "source": "messages",
+            }
+        )
     return courses
 
 

@@ -107,6 +107,43 @@ Name rules: must start with letter or underscore, no spaces, only letters/digits
 ### `foxpilot excel names [--json]`
 Open the Name Box dropdown and list defined names. Best effort — selectors may need tuning if Excel changes the dropdown markup.
 
+## Formatting
+
+Excel Online keyboard shortcuts work the same as desktop Excel. The plugin selects a range via the Name Box, then fires the shortcut.
+
+### `foxpilot excel bold <RANGE>` / `italic <RANGE>` / `underline <RANGE>`
+Toggle bold (`Ctrl+B`), italic (`Ctrl+I`), or underline (`Ctrl+U`).
+
+### `foxpilot excel number-format <RANGE> <KIND>`
+Apply a number format via the matching `Ctrl+Shift` shortcut.
+
+| Kind | Shortcut | Meaning |
+|---|---|---|
+| `general` | `Ctrl+Shift+~` | reset to General |
+| `number` | `Ctrl+Shift+1` | thousand separators, two decimals |
+| `time` | `Ctrl+Shift+2` | h:mm AM/PM |
+| `date` | `Ctrl+Shift+3` | day-month-year |
+| `currency` | `Ctrl+Shift+4` | currency symbol, two decimals |
+| `percent` | `Ctrl+Shift+5` | percentage |
+
+```bash
+foxpilot excel number-format B2:B20 currency
+foxpilot excel number-format C2:C20 percent
+foxpilot excel number-format D2:D20 date
+```
+
+### `foxpilot excel align <RANGE> <left|center|right>`
+Click the matching ribbon alignment button (Home → Alignment). **Best effort** — depends on the Excel Online ribbon DOM, which can change.
+
+### `foxpilot excel clear-format <RANGE>`
+Click the ribbon `Clear Formats` button (Home → Editing → Clear). **Best effort.** If the Clear menu is collapsed, this can fail; expand the Home ribbon manually first.
+
+## Formatting Limitations
+
+- Font color, fill color, borders, font size, and font face are **not yet supported**. They require ribbon dropdowns or the Format Cells side-panel; both are DOM-fragile in Excel Online and warrant a separate dedicated pass.
+- The Format Cells side-panel does not exist in Excel Online the same way it does in desktop Excel — `Ctrl+1` on the web opens a partial panel only. The plugin avoids it for now.
+- All formatting commands assume a workbook is open and a cell exists; running them on Excel home will fail with a Name Box error.
+
 ## JSON Shapes
 
 `open`:
