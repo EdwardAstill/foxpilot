@@ -86,18 +86,79 @@ def extract_workbook_title(driver) -> str:
 
 
 def extract_sheet_tabs(driver) -> list[dict[str, Any]]:
-    """List sheet tabs at bottom of workbook. Names + active flag."""
+    """List sheet tabs at bottom of workbook. Names + active flag.
+
+    Excel Online's sheet-tab strip lives in `#WACSheetTabs` and renders each
+    tab as `[data-automationid='SheetTab']` (modern build) or `.sheet-tab`
+    (legacy). Each tab carries the sheet name on `aria-label` and signals
+    selection via `aria-selected="true"` or class `.selected`. We try a
+    short list of selectors in priority order and fall back to a JS sweep
+    of any element whose ancestor matches the tab strip.
+    """
     by = "css selector"
-    tab_nodes = _find_all(driver, by, "[role='tab'][aria-label]")
-    if not tab_nodes:
-        tab_nodes = _find_all(driver, by, ".sheet-tab, .ewa-stss-tab")
+    selector_priority = [
+        "#WACSheetTabs [data-automationid='SheetTab']",
+        "[data-automationid='SheetTab']",
+        "#WACSheetTabs [role='tab']",
+        "[role='tab'][aria-label][data-id*='Sheet']",
+        ".sheet-tab",
+        ".ewa-stss-tab",
+        "[role='tab'][aria-label]",
+    ]
+
+    tab_nodes = []
+    for selector in selector_priority:
+        tab_nodes = _find_all(driver, by, selector)
+        if tab_nodes:
+            break
+
     sheets: list[dict[str, Any]] = []
     for node in tab_nodes:
-        name = (node.get_attribute("aria-label") or node.text or "").strip()
+        name = (
+            node.get_attribute("aria-label")
+            or node.get_attribute("title")
+            or (node.text or "")
+        ).strip()
         if not name:
             continue
-        active = (node.get_attribute("aria-selected") or "").lower() == "true"
+        selected_attr = (node.get_attribute("aria-selected") or "").lower()
+        class_attr = (node.get_attribute("class") or "").lower()
+        active = selected_attr == "true" or " selected" in f" {class_attr}"
         sheets.append({"name": name, "active": active})
+
+    if sheets:
+        return sheets
+
+    # JS fallback: scrape #WACSheetTabs descendants directly.
+    try:
+        raw = driver.execute_script(
+            """
+            const strip = document.querySelector('#WACSheetTabs') ||
+                          document.querySelector('[id*="SheetTab"]');
+            if (!strip) return [];
+            const tabs = strip.querySelectorAll(
+                "[data-automationid='SheetTab'], [role='tab'], .sheet-tab"
+            );
+            const out = [];
+            tabs.forEach(t => {
+                const name = (t.getAttribute('aria-label') ||
+                              t.getAttribute('title') ||
+                              (t.innerText || '').trim());
+                if (!name) return;
+                const cls = (t.className || '').toString().toLowerCase();
+                const active = (t.getAttribute('aria-selected') || '').toLowerCase() === 'true' ||
+                               cls.indexOf('selected') !== -1;
+                out.push({name: name, active: active});
+            });
+            return out;
+            """
+        )
+        if isinstance(raw, list):
+            for entry in raw:
+                if isinstance(entry, dict) and entry.get("name"):
+                    sheets.append({"name": str(entry["name"]).strip(), "active": bool(entry.get("active"))})
+    except Exception:
+        pass
     return sheets
 
 
@@ -320,23 +381,55 @@ def fill_direction(driver, range_ref: str, direction: str) -> dict[str, Any]:
 def create_blank_workbook(driver) -> dict[str, Any]:
     """Navigate to Excel home and click the Blank workbook tile."""
     driver.get(EXCEL_HOME)
-    from selenium.webdriver.common.by import By
-    selectors = [
-        "//*[@aria-label='Blank workbook' or normalize-space()='Blank workbook']",
-        "//button[.//*[normalize-space()='Blank workbook']]",
-        "//a[.//*[normalize-space()='Blank workbook']]",
-    ]
-    for xpath in selectors:
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    def _has_tile(d) -> bool:
         try:
-            elem = driver.find_element(By.XPATH, xpath)
+            return d.execute_script(
+                "return /create\\s+blank\\s+workbook|blank workbook/i.test("
+                "document.body.innerText || '');"
+            )
         except Exception:
-            continue
-        try:
-            elem.click()
-            return {"url": driver.current_url, "title": driver.title}
-        except Exception:
-            continue
-    raise RuntimeError("could not find 'Blank workbook' tile on Excel home")
+            return False
+
+    try:
+        WebDriverWait(driver, 12).until(_has_tile)
+    except Exception:
+        pass
+
+    clicked = False
+    try:
+        clicked = bool(driver.execute_script(
+            """
+            const labels = ['Create blank workbook', 'Blank workbook'];
+            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+            for (const el of candidates) {
+                const text = (el.innerText || el.textContent || '').trim();
+                const aria = (el.getAttribute('aria-label') || '').trim();
+                if (labels.some(l => text === l || aria === l || text.indexOf(l) === 0 || aria.indexOf(l) === 0)) {
+                    el.scrollIntoView({block: 'center'});
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+            """
+        ))
+    except Exception:
+        clicked = False
+
+    if not clicked:
+        raise RuntimeError("could not find 'Blank workbook' tile on Excel home")
+
+    try:
+        WebDriverWait(driver, 20).until(
+            lambda d: "officeapps.live.com" in (d.current_url or "")
+            or "/edit.aspx" in (d.current_url or "")
+            or "/view.aspx" in (d.current_url or "")
+        )
+    except Exception:
+        pass
+    return {"url": driver.current_url, "title": driver.title}
 
 
 def write_cell(driver, cell: str, value: str) -> dict[str, Any]:
