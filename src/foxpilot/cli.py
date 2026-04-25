@@ -586,7 +586,11 @@ def cmd_find(
         else:
             typer.echo(f"✓ {len(results)} element(s) matching '{text}':")
             for i, el in enumerate(results[:20]):
-                typer.echo(f"  [{i}] {describe_element(el)}")
+                try:
+                    line = describe_element(el)
+                except Exception as exc:
+                    line = f"<element became stale: {exc.__class__.__name__}>"
+                typer.echo(f"  [{i}] {line}")
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from foxpilot.sites.excel_service import (
     clear_format,
     create_blank_workbook,
     define_name,
+    upload_workbook,
     extract_active_cell,
     extract_sheet_tabs,
     extract_workbook_title,
@@ -73,6 +74,7 @@ Common commands:
   foxpilot excel open                       # open Excel home
   foxpilot excel open <workbook-url>        # open a specific workbook
   foxpilot excel new                        # create a blank workbook
+  foxpilot excel upload report.xlsx         # upload a local file to Excel Online
   foxpilot excel sheets                     # list sheet tabs
   foxpilot excel goto B7                    # jump to a cell via Name Box
   foxpilot excel select A1:C10              # select a range
@@ -197,6 +199,27 @@ def cmd_read(
         time.sleep(0.4)
         data = extract_active_cell(driver)
         _emit(data, json_output, format_cell)
+
+
+@app.command(name="upload")
+def cmd_upload(
+    file_path: str = typer.Argument(..., help="Local .xlsx/.xls/.xlsm/.csv path."),
+    json_output: bool = typer.Option(False, "--json", help="Return JSON."),
+) -> None:
+    """Upload a local workbook file to Excel Online."""
+    with _site_browser() as driver:
+        try:
+            data = upload_workbook(driver, file_path)
+        except FileNotFoundError as exc:
+            _exit_error(str(exc))
+        except (ValueError, RuntimeError) as exc:
+            _exit_error(
+                str(exc),
+                next_step="open Excel home with `foxpilot --visible excel open` and drop the file by hand to confirm the upload UI is reachable",
+            )
+        time.sleep(2.0)
+        data["workbook"] = extract_workbook_title(driver)
+        _emit(data, json_output, format_open_result)
 
 
 @app.command(name="new")

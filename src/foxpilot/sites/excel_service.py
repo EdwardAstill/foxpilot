@@ -86,6 +86,11 @@ def extract_workbook_title(driver) -> str:
 
 
 def extract_sheet_tabs(driver) -> list[dict[str, Any]]:
+    with _excel_frame(driver):
+        return _extract_sheet_tabs_inner(driver)
+
+
+def _extract_sheet_tabs_inner(driver) -> list[dict[str, Any]]:
     """List sheet tabs at bottom of workbook. Names + active flag.
 
     Excel Online's sheet-tab strip lives in `#WACSheetTabs` and renders each
@@ -164,26 +169,60 @@ def extract_sheet_tabs(driver) -> list[dict[str, Any]]:
 
 def extract_active_cell(driver) -> dict[str, Any]:
     """Read the active cell reference + formula-bar value."""
-    cell = _read_name_box_value(driver)
-    value = _read_formula_bar_value(driver)
-    sheet = _read_active_sheet_name(driver)
+    with _excel_frame(driver):
+        cell = _read_name_box_value(driver)
+        value = _read_formula_bar_value(driver)
+        sheet = _read_active_sheet_name(driver)
     return {"cell": cell, "value": value, "sheet": sheet}
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _excel_frame(driver):
+    """Switch into the Excel Online workbook iframe if present.
+
+    SharePoint-hosted workbooks embed Excel Online in an iframe whose name
+    starts with `WacFrame_Excel_` or whose src points at officeapps.live.com.
+    Inside the iframe live the sheet-tab strip, formula bar, Name Box, and
+    keyboard-focused cell. Top-frame queries miss them all.
+    """
+    switched = False
+    try:
+        from selenium.webdriver.common.by import By
+
+        candidates = [
+            "iframe[name^='WacFrame_Excel']",
+            "iframe[name*='WacFrame_Excel']",
+            "iframe[id^='WacFrame_Excel']",
+            "iframe[src*='officeapps.live.com']",
+            "iframe[src*='/_layouts/15/Doc']",
+        ]
+        for css in candidates:
+            try:
+                frame = driver.find_element(By.CSS_SELECTOR, css)
+            except Exception:
+                continue
+            try:
+                driver.switch_to.frame(frame)
+                switched = True
+                break
+            except Exception:
+                continue
+        yield
+    finally:
+        if switched:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
 
 
 def goto_cell(driver, cell: str) -> None:
     """Type a cell reference into the Name Box and press Enter."""
-    ref = normalize_cell_ref(cell)
-    name_box = _find_name_box(driver)
-    if name_box is None:
-        raise RuntimeError("could not find the Name Box (cell reference input)")
-    name_box.click()
-    try:
-        name_box.clear()
-    except Exception:
-        pass
-    name_box.send_keys(ref)
-    from selenium.webdriver.common.keys import Keys
-    name_box.send_keys(Keys.ENTER)
+    with _excel_frame(driver):
+        _goto_cell_inner(driver, cell)
 
 
 NUMBER_FORMAT_SHORTCUTS = {
@@ -378,6 +417,109 @@ def fill_direction(driver, range_ref: str, direction: str) -> dict[str, Any]:
     return {"range": ref, "direction": direction}
 
 
+def upload_workbook(driver, file_path: str) -> dict[str, Any]:
+    """Upload a local .xlsx to Excel Online via the hidden file input.
+
+    Navigates to Excel home, clicks the 'Upload a file' tile to expose the
+    `<input type=file>`, then sends the absolute path to it. Excel Online
+    redirects to the freshly-opened workbook URL once the upload completes.
+    """
+    import os
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    abs_path = os.path.abspath(os.path.expanduser(file_path))
+    if not os.path.isfile(abs_path):
+        raise FileNotFoundError(f"file not found: {abs_path}")
+    if not abs_path.lower().endswith((".xlsx", ".xls", ".xlsm", ".csv")):
+        raise ValueError(
+            f"unsupported file type: {abs_path} (expected .xlsx/.xls/.xlsm/.csv)"
+        )
+
+    driver.get(EXCEL_HOME)
+
+    def _has_upload_tile(d) -> bool:
+        try:
+            return d.execute_script(
+                "return /upload\\s+a\\s+file/i.test(document.body.innerText || '');"
+            )
+        except Exception:
+            return False
+
+    try:
+        WebDriverWait(driver, 12).until(_has_upload_tile)
+    except Exception:
+        pass
+
+    # Click the upload tile so Excel mounts the hidden <input type=file>.
+    try:
+        driver.execute_script(
+            """
+            const labels = ['Upload a file', 'Upload'];
+            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+            for (const el of candidates) {
+                const text = (el.innerText || '').trim();
+                if (labels.some(l => text === l || text.indexOf(l) === 0)) {
+                    el.scrollIntoView({block: 'center'});
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+            """
+        )
+    except Exception:
+        pass
+
+    # Some builds expose <input type=file> immediately on home; if not, the
+    # tile-click above mounts it. Force it visible so send_keys is accepted.
+    try:
+        driver.execute_script(
+            """
+            const inp = document.querySelector('input[type=file]');
+            if (!inp) return false;
+            inp.style.display = 'block';
+            inp.style.visibility = 'visible';
+            inp.style.opacity = '1';
+            inp.style.position = 'fixed';
+            inp.style.left = '0px';
+            inp.style.top = '0px';
+            inp.style.width = '500px';
+            inp.style.height = '40px';
+            inp.style.zIndex = '2147483647';
+            return true;
+            """
+        )
+    except Exception:
+        pass
+
+    try:
+        file_input = driver.find_element(By.CSS_SELECTOR, "input[type=file]")
+    except Exception:
+        raise RuntimeError(
+            "could not locate the Excel upload input — UI may have changed; "
+            "fall back to opening Excel home manually and dragging the file in"
+        )
+
+    file_input.send_keys(abs_path)
+
+    # Excel routes to /edit.aspx or officeapps.live.com after upload.
+    try:
+        WebDriverWait(driver, 60).until(
+            lambda d: "officeapps.live.com" in (d.current_url or "")
+            or "/edit.aspx" in (d.current_url or "")
+            or "/view.aspx" in (d.current_url or "")
+        )
+    except Exception:
+        pass
+
+    return {
+        "url": driver.current_url,
+        "title": driver.title,
+        "uploaded": abs_path,
+    }
+
+
 def create_blank_workbook(driver) -> dict[str, Any]:
     """Navigate to Excel home and click the Blank workbook tile."""
     driver.get(EXCEL_HOME)
@@ -434,14 +576,30 @@ def create_blank_workbook(driver) -> dict[str, Any]:
 
 def write_cell(driver, cell: str, value: str) -> dict[str, Any]:
     """Navigate to a cell and type a value, finishing with Enter."""
-    goto_cell(driver, cell)
-    from selenium.webdriver.common.action_chains import ActionChains
-    from selenium.webdriver.common.keys import Keys
-    actions = ActionChains(driver)
-    actions.send_keys(value)
-    actions.send_keys(Keys.ENTER)
-    actions.perform()
+    with _excel_frame(driver):
+        _goto_cell_inner(driver, cell)
+        from selenium.webdriver.common.action_chains import ActionChains
+        from selenium.webdriver.common.keys import Keys
+        actions = ActionChains(driver)
+        actions.send_keys(value)
+        actions.send_keys(Keys.ENTER)
+        actions.perform()
     return {"cell": normalize_cell_ref(cell), "value": value}
+
+
+def _goto_cell_inner(driver, cell: str) -> None:
+    ref = normalize_cell_ref(cell)
+    name_box = _find_name_box(driver)
+    if name_box is None:
+        raise RuntimeError("could not find the Name Box (cell reference input)")
+    name_box.click()
+    try:
+        name_box.clear()
+    except Exception:
+        pass
+    name_box.send_keys(ref)
+    from selenium.webdriver.common.keys import Keys
+    name_box.send_keys(Keys.ENTER)
 
 
 def _read_name_box_value(driver) -> str:
@@ -518,6 +676,7 @@ __all__ = [
     "clear_format",
     "create_blank_workbook",
     "define_name",
+    "upload_workbook",
     "extract_active_cell",
     "extract_sheet_tabs",
     "extract_workbook_title",
