@@ -56,6 +56,28 @@ from foxpilot.sites.macro import app as macro_app
 from foxpilot.sites.macro import set_command_prefix_factory as set_macro_command_prefix_factory
 from foxpilot.sites.onedrive import app as onedrive_app
 from foxpilot.sites.onedrive import set_browser_factory as set_onedrive_browser_factory
+from foxpilot.sites.excel import app as excel_app
+from foxpilot.sites.excel import set_browser_factory as set_excel_browser_factory
+from foxpilot.sites.youtube_music import app as youtube_music_app
+from foxpilot.sites.youtube_music import set_browser_factory as set_youtube_music_browser_factory
+from foxpilot.sites.lms import app as lms_app
+from foxpilot.sites.lms import set_browser_factory as set_lms_browser_factory
+from foxpilot.sites.gmail import app as gmail_app
+from foxpilot.sites.gmail import set_browser_factory as set_gmail_browser_factory
+from foxpilot.sites.gcal import app as gcal_app
+from foxpilot.sites.gcal import set_browser_factory as set_gcal_browser_factory
+from foxpilot.sites.outlook import app as outlook_app
+from foxpilot.sites.outlook import set_browser_factory as set_outlook_browser_factory
+from foxpilot.sites.teams import app as teams_app
+from foxpilot.sites.teams import set_browser_factory as set_teams_browser_factory
+from foxpilot.sites.drive import app as drive_app
+from foxpilot.sites.drive import set_browser_factory as set_drive_browser_factory
+from foxpilot.sites.wikipedia import app as wikipedia_app
+from foxpilot.sites.wikipedia import set_browser_factory as set_wikipedia_browser_factory
+from foxpilot.sites.linkedin import app as linkedin_app
+from foxpilot.sites.linkedin import set_browser_factory as set_linkedin_browser_factory
+from foxpilot.sites.amazon import app as amazon_app
+from foxpilot.sites.amazon import set_browser_factory as set_amazon_browser_factory
 from foxpilot.plugins import Plugin, discover_plugins
 
 app = typer.Typer(
@@ -173,6 +195,72 @@ app.add_typer(
     onedrive_app,
     name="onedrive",
     help="OneDrive Online navigation helpers.",
+)
+set_excel_browser_factory(_branch_browser)
+app.add_typer(
+    excel_app,
+    name="excel",
+    help="Excel Online navigation and cell helpers.",
+)
+set_youtube_music_browser_factory(_branch_browser)
+app.add_typer(
+    youtube_music_app,
+    name="youtube-music",
+    help="YouTube Music search, playback, and playlist helpers.",
+)
+set_lms_browser_factory(_branch_browser)
+app.add_typer(
+    lms_app,
+    name="lms",
+    help="UWA Blackboard Ultra (lms.uwa.edu.au) navigation, stream, courses, grades.",
+)
+set_gmail_browser_factory(_branch_browser)
+app.add_typer(
+    gmail_app,
+    name="gmail",
+    help="Gmail navigation, message list/read/search, compose + thread actions.",
+)
+set_gcal_browser_factory(_branch_browser)
+app.add_typer(
+    gcal_app,
+    name="gcal",
+    help="Google Calendar navigation and event helpers.",
+)
+set_outlook_browser_factory(_branch_browser)
+app.add_typer(
+    outlook_app,
+    name="outlook",
+    help="Microsoft 365 Outlook on the web (mail + calendar) helpers.",
+)
+set_teams_browser_factory(_branch_browser)
+app.add_typer(
+    teams_app,
+    name="teams",
+    help="Microsoft Teams web navigation and messaging helpers.",
+)
+set_drive_browser_factory(_branch_browser)
+app.add_typer(
+    drive_app,
+    name="drive",
+    help="Google Drive navigation, search, and download helpers.",
+)
+set_wikipedia_browser_factory(_branch_browser)
+app.add_typer(
+    wikipedia_app,
+    name="wikipedia",
+    help="Wikipedia article lookup, search, summary, and reference helpers.",
+)
+set_linkedin_browser_factory(_branch_browser)
+app.add_typer(
+    linkedin_app,
+    name="linkedin",
+    help="LinkedIn navigation, profile, search, and messaging helpers.",
+)
+set_amazon_browser_factory(_branch_browser)
+app.add_typer(
+    amazon_app,
+    name="amazon",
+    help="Amazon search, product, orders, cart, and tracking helpers.",
 )
 
 
