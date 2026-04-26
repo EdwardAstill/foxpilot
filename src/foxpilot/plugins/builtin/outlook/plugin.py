@@ -20,7 +20,7 @@ def register(context: PluginContext) -> Plugin:
         auth_notes=(
             "Sign into outlook.office.com once. UWA M365 users likely already "
             "have a session in their Zen browser; default mode is --zen. For "
-            "the dedicated claude profile run `foxpilot login "
+            "the dedicated automation profile run `foxpilot login "
             "https://outlook.office.com/mail/`."
         ),
         browser_modes=("zen", "visible", "claude"),

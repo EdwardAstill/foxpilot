@@ -209,7 +209,7 @@ Download shape:
 ## Failure Modes
 
 - Sign-in page or consent prompt: run `foxpilot login https://onedrive.live.com` or use `--zen`.
-- Browser unavailable or Marionette port errors: run `foxpilot doctor`; Foxpilot needs local WebDriver socket access and a writable claude profile directory.
+- Browser unavailable or Marionette port errors: run `foxpilot doctor`; Foxpilot needs local WebDriver socket access and writable auth storage.
 - Empty `files` output: wait for OneDrive to finish rendering or retry with `foxpilot --visible onedrive files`.
 - Search box not found: OneDrive UI may have changed; use `foxpilot page inputs` or `foxpilot page buttons` to inspect the visible controls.
 - Download timeout: check that the browser is downloading to the same directory passed with `--dir`, and retry visibly if OneDrive shows a confirmation prompt.

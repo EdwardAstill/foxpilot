@@ -82,7 +82,7 @@ Sections (open):
   home, explore, library, playlists
 
 Auth:
-  Default mode is the dedicated claude profile:
+  Default mode is the dedicated automation profile:
     foxpilot login https://music.youtube.com
   Or import cookies from your main browser:
     foxpilot import-cookies --domain youtube.com --include-storage

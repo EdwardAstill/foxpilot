@@ -95,7 +95,7 @@ Auth:
     foxpilot login https://teams.microsoft.com/
 
 Modes:
-  default --zen (recommended), --visible, claude profile after login
+  default --zen (recommended), --visible, automation profile after login
 
 Run:
   foxpilot teams <command> --help"""

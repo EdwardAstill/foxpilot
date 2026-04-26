@@ -80,7 +80,7 @@ Confirmation gates:
 
 Auth:
   foxpilot login https://mail.google.com         # one-time
-  default mode is the claude profile.
+  default mode is the automation profile.
 
 Modes:
   default claude (recommended), --visible, --zen

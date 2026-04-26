@@ -4,7 +4,7 @@ Each tool mirrors the CLI command with the same name and semantics.
 
 All tools accept:
     mode    — "claude" (default), "zen", or "headless".
-              "claude" uses a dedicated Zen profile, hidden in a Hyprland
+              "claude" uses a dedicated automation Zen profile, hidden in a Hyprland
               special workspace so it does not steal the user's screen.
               "zen" attaches to the user's running Zen instance (shares tabs).
               "headless" launches an ephemeral Firefox with no session.
@@ -13,7 +13,7 @@ All tools accept:
               bring it onto the user's active workspace.
 
 Lifecycle tools (`show`, `hide`, `status`, `login`) manage the dedicated
-claude profile without performing browser actions.
+automation profile without performing browser actions.
 
 Start with: foxpilot mcp
 """
@@ -760,12 +760,12 @@ def css_fill(selector: str, value: str, mode: str = "claude", visible: bool = Fa
 
 
 # ---------------------------------------------------------------------------
-# Claude profile lifecycle (Hyprland scratchpad)
+# Automation profile lifecycle (Hyprland scratchpad)
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
 def show() -> str:
-    """Bring the claude-profile Zen window onto the user's active workspace.
+    """Bring the automation-profile Zen window onto the user's active workspace.
 
     Use only when the user explicitly wants to see the agent operate the
     browser (e.g. they ask to demo a flow, or solve a CAPTCHA). Otherwise
@@ -782,7 +782,7 @@ def show() -> str:
 
 @mcp.tool()
 def hide() -> str:
-    """Send the claude-profile Zen window to the special:claude scratchpad.
+    """Send the automation-profile Zen window to the special:claude scratchpad.
 
     Call this after a `show` once the user has seen what they wanted.
     """
@@ -797,14 +797,14 @@ def hide() -> str:
 
 @mcp.tool()
 def status() -> str:
-    """Report claude-profile state — running, visibility, profile dir, port."""
+    """Report automation-profile state — running, visibility, profile dir, port."""
     s = claude_status()
     return "\n".join(f"{k:<18} {v}" for k, v in s.items())
 
 
 @mcp.tool()
 def login(target_url: str = "") -> str:
-    """Open the claude profile visibly so the USER can log into a site once.
+    """Open the automation profile visibly so the USER can log into a site once.
 
     Cookies persist in the profile dir, so subsequent hidden agent commands
     reuse the session. Use this when the agent needs an authenticated session
@@ -817,7 +817,7 @@ def login(target_url: str = "") -> str:
     with browser(mode="claude", visible=True) as driver:
         driver.get(target_url or "about:preferences")
     return (
-        "✓ claude profile open and visible. Hand off to the user — they should "
+        "✓ automation profile open and visible. Hand off to the user — they should "
         "log in, then call `hide` (or do nothing; the window stays put)."
     )
 

@@ -19,7 +19,7 @@ def register(context: PluginContext) -> Plugin:
         docs_path=Path("docs/commands/drive.md"),
         auth_notes=(
             "Sign into drive.google.com once via `foxpilot login https://drive.google.com`; "
-            "session cookies persist in the claude profile. Cookie import via "
+            "session cookies persist in the automation profile. Cookie import via "
             "`foxpilot import-cookies --domain google.com --include-storage` also works."
         ),
         browser_modes=("claude", "visible", "zen"),

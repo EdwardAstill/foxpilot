@@ -8,7 +8,7 @@ Google Calendar (`calendar.google.com`) helpers: open views, list events, open e
 
 ## Authentication
 
-Sign into `https://calendar.google.com/` once in the foxpilot browser. Session cookies persist in the claude profile across runs.
+Sign into `https://calendar.google.com/` once in the foxpilot browser. Session cookies persist in the automation profile across runs.
 
 ```bash
 foxpilot login https://calendar.google.com/

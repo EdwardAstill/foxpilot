@@ -98,7 +98,7 @@ Auth:
   Sign into outlook.office.com once. UWA M365 users will likely already
   have an existing session in their Zen browser:
     foxpilot --zen outlook open
-  For the dedicated claude profile:
+  For the dedicated automation profile:
     foxpilot login https://outlook.office.com/mail/
 
 Modes:

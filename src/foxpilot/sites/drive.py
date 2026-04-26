@@ -94,7 +94,7 @@ Views:
   home, recent, starred, shared, trash
 
 Auth:
-  Sign in once via the foxpilot claude profile:
+  Sign in once via the foxpilot automation profile:
     foxpilot login https://drive.google.com
   Or import cookies:
     foxpilot import-cookies --domain google.com --include-storage

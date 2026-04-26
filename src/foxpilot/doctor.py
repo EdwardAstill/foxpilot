@@ -9,7 +9,7 @@ import socket
 import sys
 from pathlib import Path
 
-from foxpilot.core import CLAUDE_PROFILE_DIR
+from foxpilot.core import AUTOMATION_PROFILE_DIR, auth_storage_status, ensure_auth_storage
 
 
 def _check_binary(name: str) -> dict[str, object]:
@@ -36,8 +36,8 @@ def _nearest_existing_parent(path: Path) -> Path:
     return current
 
 
-def _check_profile_parent() -> dict[str, object]:
-    parent = CLAUDE_PROFILE_DIR.parent
+def _check_auth_storage_parent() -> dict[str, object]:
+    parent = AUTOMATION_PROFILE_DIR.parent
     existing = _nearest_existing_parent(parent)
     writable = os.access(existing, os.W_OK)
     if writable:
@@ -56,21 +56,27 @@ def run_diagnostics() -> dict[str, dict[str, object]]:
         "zen_browser": _check_binary("zen-browser"),
         "socket_bind": _check_socket_bind(),
         "hyprctl": _check_binary("hyprctl"),
-        "claude_profile_parent": _check_profile_parent(),
-    }
+        "auth_storage_parent": _check_auth_storage_parent(),
+    } | auth_storage_status()
 
 
-def run_safe_fixes(*, profile_dir: Path = CLAUDE_PROFILE_DIR) -> dict[str, dict[str, object]]:
+def run_safe_fixes(*, profile_dir: Path = AUTOMATION_PROFILE_DIR) -> dict[str, dict[str, object]]:
     """Apply safe, reversible repairs and return a report."""
     report: dict[str, dict[str, object]] = {}
     try:
-        profile_dir.parent.mkdir(parents=True, exist_ok=True)
-        report["claude_profile_parent"] = {
+        storage = ensure_auth_storage(profile_dir=profile_dir)
+        report["auth_storage_parent"] = {
             "ok": True,
             "message": f"created or verified {profile_dir.parent}",
         }
+        report["auth_storage"] = {
+            "ok": True,
+            "message": f"created private auth storage at {storage['data_dir']}",
+        }
     except OSError as exc:
-        report["claude_profile_parent"] = {"ok": False, "message": str(exc)}
+        report["auth_storage_parent"] = {"ok": False, "message": str(exc)}
+    except RuntimeError as exc:
+        report["auth_storage"] = {"ok": False, "message": str(exc)}
     return report
 
 

@@ -19,7 +19,7 @@ def register(context: PluginContext) -> Plugin:
         docs_path=Path("docs/commands/excel.md"),
         auth_notes=(
             "Sign into excel.cloud.microsoft once in the foxpilot browser; "
-            "session cookies persist in the claude profile."
+            "session cookies persist in the automation profile."
         ),
         browser_modes=("claude", "visible", "zen"),
     )

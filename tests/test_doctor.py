@@ -17,7 +17,7 @@ class DoctorTests(unittest.TestCase):
             "zen_browser",
             "socket_bind",
             "hyprctl",
-            "claude_profile_parent",
+            "auth_storage_parent",
         ):
             self.assertIn(key, report)
             self.assertIn("ok", report[key])
@@ -25,12 +25,12 @@ class DoctorTests(unittest.TestCase):
 
     def test_safe_fixes_create_profile_parent(self):
         with tempfile.TemporaryDirectory() as tmp:
-            profile_dir = Path(tmp) / "foxpilot" / "claude-profile"
+            profile_dir = Path(tmp) / "foxpilot" / "automation-profile"
 
             result = run_safe_fixes(profile_dir=profile_dir)
 
             self.assertTrue(profile_dir.parent.exists())
-            self.assertTrue(result["claude_profile_parent"]["ok"])
+            self.assertTrue(result["auth_storage_parent"]["ok"])
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ Rate limits:
 Auth:
   Default mode is --zen so the user's already-signed-in Zen session
   is reused. LinkedIn flags new-device sessions; expect a challenge
-  prompt if you sign in fresh in the claude profile.
+  prompt if you sign in fresh in the automation profile.
 
 Modes:
   default --zen (recommended), --visible, claude (fragile)

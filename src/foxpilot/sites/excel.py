@@ -102,7 +102,7 @@ Notes:
 
 Auth:
   Sign into excel.cloud.microsoft once in the foxpilot browser. Cookie
-  state persists across runs in the claude profile.
+  state persists across runs in the automation profile.
 
 Modes:
   default claude (recommended), --visible, --zen, --headless-mode

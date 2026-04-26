@@ -114,7 +114,7 @@ Open Outlook calendar at a view (`day` / `week` / `workweek` / `month`) and list
 | `send requires explicit confirmation` | `send` invoked without `--yes` | re-run with `--yes` to actually send |
 | `no matching Outlook message` | Search returned zero rows | run `foxpilot outlook search ...` to inspect |
 | `could not find Outlook 'New mail' button` | Compose surface still loading or markup changed | retry with `--visible` and verify selectors |
-| SSO redirect to `login.microsoftonline.com` | Session expired | `foxpilot --zen outlook open` and finish SSO, or re-run `foxpilot login` for the claude profile |
+| SSO redirect to `login.microsoftonline.com` | Session expired | `foxpilot --zen outlook open` and finish SSO, or re-run `foxpilot login` for the automation profile |
 
 ## Limitations
 

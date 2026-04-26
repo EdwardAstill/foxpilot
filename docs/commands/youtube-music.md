@@ -21,11 +21,16 @@ foxpilot login https://music.youtube.com
 ```
 
 If you already have a signed-in session in your main Zen browser you can
-reuse those cookies in the claude profile:
+reuse those cookies in the automation profile:
 
 ```bash
-foxpilot import-cookies --domain youtube.com --include-storage
+foxpilot import-cookies --domain youtube.com --domain google.com --include-storage
 ```
+
+Including both domains in one command keeps the YouTube frontend cookies and
+Google account cookies together in the imported profile. Cookie auth remains
+browser profile state under `~/.local/share/foxpilot/automation-profile`; it is
+not copied into a project `.secrets` directory.
 
 `--zen` is supported when you want to drive your real browser session.
 

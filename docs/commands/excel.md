@@ -19,7 +19,7 @@ This means reads return whatever the formula bar shows for the active cell after
 
 ## Authentication
 
-Sign into `https://excel.cloud.microsoft/` once in the foxpilot browser. Session cookies persist in the claude profile across runs.
+Sign into `https://excel.cloud.microsoft/` once in the foxpilot browser. Session cookies persist in the automation profile across runs.
 
 ```bash
 foxpilot login https://excel.cloud.microsoft/

@@ -84,13 +84,13 @@ Sections (for `open`):
 
 Auth:
   Default mode is --zen because most UWA students are already signed into LMS
-  in their Zen browser. For the dedicated claude profile, run:
+  in their Zen browser. For the dedicated automation profile, run:
     foxpilot login https://lms.uwa.edu.au/ultra/stream
   Or import cookies:
     foxpilot import-cookies --domain lms.uwa.edu.au --include-storage
 
 Modes:
-  default --zen (recommended), --visible, claude profile (after login).
+  default --zen (recommended), --visible, automation profile (after login).
   Headless is unsupported: UWA Pheme SSO needs a real session.
 
 Run:

@@ -19,7 +19,7 @@ def register(context: PluginContext) -> Plugin:
         docs_path=Path("docs/commands/teams.md"),
         auth_notes=(
             "Default mode --zen reuses your Zen browser's existing M365 session "
-            "for teams.microsoft.com. For claude profile run "
+            "for teams.microsoft.com. For automation profile run "
             "`foxpilot login https://teams.microsoft.com/` once."
         ),
         browser_modes=("zen", "visible", "claude"),

@@ -19,7 +19,7 @@ def register(context: PluginContext) -> Plugin:
         docs_path=Path("docs/commands/gmail.md"),
         auth_notes=(
             "Sign into mail.google.com once via `foxpilot login https://mail.google.com`; "
-            "session cookies persist in the claude profile. Use `--zen` to reuse an existing "
+            "session cookies persist in the automation profile. Use `--zen` to reuse an existing "
             "Zen browser session if you already have Gmail signed-in there."
         ),
         browser_modes=("claude", "visible", "zen"),

@@ -19,7 +19,7 @@ def register(context: PluginContext) -> Plugin:
         docs_path=Path("docs/commands/gcal.md"),
         auth_notes=(
             "Sign into calendar.google.com once via `foxpilot login https://calendar.google.com/`; "
-            "session cookies persist in the claude profile. --zen reuses the user's real Zen session."
+            "session cookies persist in the automation profile. --zen reuses the user's real Zen session."
         ),
         browser_modes=("claude", "visible", "zen"),
     )

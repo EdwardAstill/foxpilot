@@ -232,7 +232,7 @@ Those future commands should report the workflow name, run id, status, conclusio
 - Missing access to Actions logs: confirm the account can view the repository in the browser, then retry with the authenticated profile or `--zen`.
 - Current-page commands cannot infer a repository: pass `owner/repo` explicitly.
 - Rate limiting or verification page: switch to a logged-in profile and capture evidence with `screenshot` or `html` for implementation follow-up.
-- Browser unavailable or Marionette port errors: run `foxpilot doctor`; Foxpilot needs local WebDriver socket access and a writable claude profile directory.
+- Browser unavailable or Marionette port errors: run `foxpilot doctor`; Foxpilot needs local WebDriver socket access and writable auth storage.
 - GitHub DOM changed: retry with `--visible`, then inspect the page with generic `read`, `find`, and `html` commands.
 - Explore pages changed or returned sparse results: retry with `--visible`; discovery pages are more dynamic than repository pages.
 - Headless blocked or incomplete: retry in the default `claude` profile or with `--zen`.

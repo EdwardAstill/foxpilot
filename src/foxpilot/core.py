@@ -1,7 +1,9 @@
 """foxpilot.core — browser connection and shared automation logic."""
 
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
+import stat
 from typing import Optional
 
 MARIONETTE_PORT = 2828
@@ -12,7 +14,216 @@ MARIONETTE_PORT = 2828
 CLAUDE_MARIONETTE_PORT = 2829
 CLAUDE_WM_CLASS = "ClaudeZen"
 CLAUDE_SPECIAL_WORKSPACE = "claude"
-CLAUDE_PROFILE_DIR = Path.home() / ".local/share/foxpilot/claude-profile"
+FOXPILOT_DATA_DIR = Path.home() / ".local/share/foxpilot"
+AUTOMATION_PROFILE_DIR = FOXPILOT_DATA_DIR / "automation-profile"
+LEGACY_CLAUDE_PROFILE_DIR = FOXPILOT_DATA_DIR / "claude-profile"
+FOXPILOT_SECRETS_DIR = FOXPILOT_DATA_DIR / "secrets"
+# Backwards-compatible import name for older callers. This now points at the
+# model-neutral automation profile path.
+CLAUDE_PROFILE_DIR = AUTOMATION_PROFILE_DIR
+
+
+def _ensure_private_dir(path: Path) -> None:
+    """Create a directory and remove group/other permissions."""
+    if path.exists() and path.is_symlink():
+        raise RuntimeError(f"Refusing to use symlinked auth directory: {path}")
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o077:
+        path.chmod(mode & ~0o077)
+
+
+def _ensure_private_file(path: Path) -> None:
+    """Remove group/other permissions from a file containing browser state."""
+    if path.exists() and path.is_symlink():
+        raise RuntimeError(f"Refusing to use symlinked auth file: {path}")
+    if path.exists():
+        path.chmod(0o600)
+
+
+def _write_private_file(path: Path, text: str) -> None:
+    path.write_text(text)
+    _ensure_private_file(path)
+
+
+def migrate_legacy_profile(
+    *,
+    profile_dir: Optional[Path] = None,
+    legacy_profile_dir: Optional[Path] = None,
+) -> dict[str, str]:
+    """Move the old claude-profile directory to automation-profile when safe."""
+    import shutil
+
+    profile_dir = profile_dir or AUTOMATION_PROFILE_DIR
+    legacy_profile_dir = legacy_profile_dir or LEGACY_CLAUDE_PROFILE_DIR
+
+    if legacy_profile_dir == profile_dir:
+        return {
+            "legacy_migration": "none",
+            "legacy": "legacy and automation profile paths are identical",
+        }
+    if not legacy_profile_dir.exists():
+        return {
+            "legacy_migration": "none",
+            "legacy": f"no legacy profile at {legacy_profile_dir}",
+        }
+    if legacy_profile_dir.is_symlink():
+        raise RuntimeError(f"Refusing to migrate symlinked legacy profile: {legacy_profile_dir}")
+    if profile_dir.exists():
+        return {
+            "legacy_migration": "skipped_new_exists",
+            "legacy": (
+                f"legacy profile remains at {legacy_profile_dir}; "
+                f"automation profile already exists at {profile_dir}"
+            ),
+        }
+
+    _ensure_private_dir(profile_dir.parent)
+    shutil.move(str(legacy_profile_dir), str(profile_dir))
+    _ensure_private_dir(profile_dir)
+    return {
+        "legacy_migration": "moved",
+        "legacy": f"moved {legacy_profile_dir} to {profile_dir}",
+    }
+
+
+def ensure_auth_storage(
+    *,
+    profile_dir: Optional[Path] = None,
+    secrets_dir: Optional[Path] = None,
+    legacy_profile_dir: Optional[Path] = None,
+) -> dict[str, str]:
+    """Create foxpilot's private auth storage.
+
+    Browser session auth stays in the dedicated browser profile. The secrets
+    directory is for non-browser tokens/config that should not live in repos.
+    """
+    profile_dir = profile_dir or AUTOMATION_PROFILE_DIR
+    secrets_dir = secrets_dir or (profile_dir.parent / "secrets")
+    legacy_profile_dir = legacy_profile_dir or LEGACY_CLAUDE_PROFILE_DIR
+    data_dir = profile_dir.parent
+
+    _ensure_private_dir(data_dir)
+    migration = migrate_legacy_profile(
+        profile_dir=profile_dir,
+        legacy_profile_dir=legacy_profile_dir,
+    )
+    _ensure_private_dir(profile_dir)
+    _ensure_private_dir(secrets_dir)
+
+    readme = secrets_dir / "README.txt"
+    if not readme.exists():
+        _write_private_file(
+            readme,
+            "Foxpilot secrets directory.\n"
+            "\n"
+            "Browser cookies stay in ../automation-profile/ as browser profile "
+            "state.\n"
+            "Put only non-browser API tokens or local auth config here.\n"
+            "Do not symlink or commit this directory.\n",
+        )
+    else:
+        _ensure_private_file(readme)
+
+    return {
+        "data_dir": str(data_dir),
+        "automation_profile_dir": str(profile_dir),
+        "legacy_claude_profile_dir": str(legacy_profile_dir),
+        "secrets_dir": str(secrets_dir),
+        "legacy_migration": migration["legacy_migration"],
+        "browser_auth": "browser cookies/session storage stay in automation_profile_dir",
+        "api_secrets": "non-browser tokens belong in secrets_dir, never project .secrets",
+    }
+
+
+def auth_storage_status(
+    *,
+    profile_dir: Optional[Path] = None,
+    secrets_dir: Optional[Path] = None,
+    legacy_profile_dir: Optional[Path] = None,
+) -> dict[str, dict[str, object]]:
+    profile_dir = profile_dir or AUTOMATION_PROFILE_DIR
+    secrets_dir = secrets_dir or (profile_dir.parent / "secrets")
+    legacy_profile_dir = legacy_profile_dir or LEGACY_CLAUDE_PROFILE_DIR
+    paths = {
+        "foxpilot_data_dir": profile_dir.parent,
+        "automation_profile_dir": profile_dir,
+        "secrets_dir": secrets_dir,
+    }
+    report: dict[str, dict[str, object]] = {}
+    for key, path in paths.items():
+        if not path.exists():
+            report[key] = {
+                "ok": True,
+                "message": f"{path} not created yet",
+            }
+            continue
+        if path.is_symlink():
+            report[key] = {
+                "ok": False,
+                "message": f"{path} is a symlink; refusing auth storage",
+            }
+            continue
+        if not path.is_dir():
+            report[key] = {"ok": False, "message": f"{path} is not a directory"}
+            continue
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if mode & 0o077:
+            report[key] = {
+                "ok": False,
+                "message": f"{path} permissions are {mode:o}, expected 700",
+            }
+        else:
+            report[key] = {"ok": True, "message": f"{path} private ({mode:o})"}
+    if legacy_profile_dir.exists():
+        report["legacy_claude_profile_dir"] = {
+            "ok": False,
+            "message": (
+                f"legacy profile exists at {legacy_profile_dir}; "
+                "run `foxpilot auth migrate`"
+            ),
+        }
+    else:
+        report["legacy_claude_profile_dir"] = {
+            "ok": True,
+            "message": f"no legacy profile at {legacy_profile_dir}",
+        }
+    return report
+
+
+def auth_storage_report() -> dict[str, str]:
+    status = auth_storage_status()
+    ok = all(item.get("ok") for item in status.values())
+    initialized = (
+        FOXPILOT_DATA_DIR.exists()
+        and AUTOMATION_PROFILE_DIR.exists()
+        and FOXPILOT_SECRETS_DIR.exists()
+    )
+    legacy = status["legacy_claude_profile_dir"]["message"]
+    if not initialized:
+        summary = "not initialized; run `foxpilot auth init`"
+    elif ok:
+        summary = "private"
+    else:
+        summary = "run `foxpilot auth doctor` or `foxpilot auth init`"
+    return {
+        "data_dir": str(FOXPILOT_DATA_DIR),
+        "automation_profile_dir": str(AUTOMATION_PROFILE_DIR),
+        "legacy_claude_profile_dir": str(LEGACY_CLAUDE_PROFILE_DIR),
+        "secrets_dir": str(FOXPILOT_SECRETS_DIR),
+        "browser_auth": "browser cookies/session/localStorage stay in automation_profile_dir",
+        "api_secrets": "API tokens and non-browser auth config belong in secrets_dir",
+        "legacy": str(legacy),
+        "status": summary,
+    }
+
+
+def _normalize_cookie_domains(domain: Optional[str | Sequence[str]]) -> list[str]:
+    if domain is None:
+        return []
+    if isinstance(domain, str):
+        return [domain] if domain else []
+    return [item for item in domain if item]
 
 
 # ---------------------------------------------------------------------------
@@ -258,28 +469,31 @@ def _set_claude_visibility(visible: bool) -> dict:
 
 
 def _ensure_claude_user_js() -> None:
-    """Write a user.js into the claude profile pinning the Marionette port.
+    """Write a user.js into the automation profile pinning the Marionette port.
 
     Firefox / Zen do not honor a `--marionette-port` CLI flag; the listener
     port is read from the `marionette.port` pref when `--marionette` enables
     the agent. So we set it via user.js, which is loaded before Marionette
     starts and overrides any prefs.js value.
     """
+    _ensure_private_dir(CLAUDE_PROFILE_DIR)
     user_js = CLAUDE_PROFILE_DIR / "user.js"
     pref_line = f'user_pref("marionette.port", {CLAUDE_MARIONETTE_PORT});'
     existing = user_js.read_text() if user_js.exists() else ""
     if pref_line not in existing:
-        user_js.write_text(existing + pref_line + "\n")
+        _write_private_file(user_js, existing + pref_line + "\n")
+    else:
+        _ensure_private_file(user_js)
 
 
 def _launch_claude_zen() -> None:
-    """Launch a dedicated Zen instance against the claude profile dir, on a
+    """Launch a dedicated Zen instance against the automation profile dir, on a
     separate marionette port, with a custom WM class so Hyprland can target it.
     """
     import os
     import time
 
-    CLAUDE_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_auth_storage()
     _ensure_claude_user_js()
 
     env = os.environ.copy()
@@ -433,20 +647,20 @@ def _kill_claude_zen() -> None:
 
 def import_cookies(
     src_profile: Optional[Path] = None,
-    domain: Optional[str] = None,
+    domain: Optional[str | Sequence[str]] = None,
     include_storage: bool = False,
     include_passwords: bool = False,
 ) -> dict:
     """Copy cookies (and optionally localStorage / saved logins) from the
-    user's main Zen profile into the claude profile.
+    user's main Zen profile into the automation profile.
 
     Uses SQLite's online backup API so copying from a live source database
-    (the user's running Zen) is safe. The claude profile must NOT be running
+    (the user's running Zen) is safe. The automation profile must NOT be running
     while we write to it — this function kills it first.
 
     Args:
         src_profile: path to source Zen profile dir; auto-detected if None.
-        domain: if given, only import cookies whose host LIKE %domain%.
+        domain: if given, only import cookies whose host LIKE one of these domains.
         include_storage: also copy webappsstore.sqlite (DOM Storage / localStorage).
         include_passwords: also copy logins.json + key4.db (saved passwords).
     """
@@ -459,15 +673,17 @@ def import_cookies(
         raise RuntimeError(
             "Couldn't auto-detect a main Zen profile. Pass --from explicitly."
         )
+    domains = _normalize_cookie_domains(domain)
 
     _kill_claude_zen()
-    CLAUDE_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_auth_storage()
     _ensure_claude_user_js()
 
     report: dict = {
         "src": str(src_profile),
         "dst": str(CLAUDE_PROFILE_DIR),
         "cookies_copied": 0,
+        "domains": domains,
         "storage_copied": False,
         "passwords_copied": False,
     }
@@ -494,10 +710,11 @@ def import_cookies(
         # Now operate on the snapshot — no live writer to fight.
         snap_conn = sqlite3.connect(snap)
         try:
-            if domain:
+            if domains:
+                predicate = " OR ".join("host LIKE ?" for _ in domains)
                 snap_conn.execute(
-                    "DELETE FROM moz_cookies WHERE host NOT LIKE ?",
-                    (f"%{domain}%",),
+                    f"DELETE FROM moz_cookies WHERE NOT ({predicate})",
+                    tuple(f"%{item}%" for item in domains),
                 )
                 snap_conn.commit()
             # Force WAL contents into the main db file so we can move just the
@@ -515,6 +732,7 @@ def import_cookies(
             if p.exists():
                 p.unlink()
         shutil.move(str(snap), str(dst_cookies))
+        _ensure_private_file(dst_cookies)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -528,10 +746,12 @@ def import_cookies(
                 if p.exists():
                     p.unlink()
             shutil.copy2(src_store, dst_store)
+            _ensure_private_file(dst_store)
             for ext in ("-wal", "-shm"):
                 src_extra = Path(str(src_store) + ext)
                 if src_extra.exists():
                     shutil.copy2(src_extra, str(dst_store) + ext)
+                    _ensure_private_file(Path(str(dst_store) + ext))
             # Checkpoint to consolidate
             try:
                 conn = sqlite3.connect(dst_store)
@@ -547,13 +767,14 @@ def import_cookies(
             src_f = src_profile / fname
             if src_f.exists():
                 shutil.copy2(src_f, CLAUDE_PROFILE_DIR / fname)
+                _ensure_private_file(CLAUDE_PROFILE_DIR / fname)
                 report["passwords_copied"] = True
 
     return report
 
 
 def claude_status() -> dict:
-    """Report claude profile state — running, marionette port, visibility."""
+    """Report automation profile state — running, marionette port, visibility."""
     win = _find_claude_window()
     visible = False
     workspace = None
@@ -685,7 +906,7 @@ def doctor_report(mode: str = "claude") -> dict:
     if not claude["socket_access"]:
         report.update(
             status="blocked",
-            summary="foxpilot cannot reach the claude-profile browser from this environment.",
+            summary="foxpilot cannot reach the automation-profile browser from this environment.",
             next_step="Run foxpilot outside the sandbox, then retry.",
             fallback="If you need the visible on-screen browser right now, hand off to desktop automation / computer-control.",
         )
@@ -700,7 +921,7 @@ def doctor_report(mode: str = "claude") -> dict:
         report.update(
             status="launchable",
             summary="The dedicated claude browser is not running yet, but foxpilot can launch it automatically.",
-            next_step="Run foxpilot <command>; it will start the claude profile for you.",
+            next_step="Run foxpilot <command>; it will start the automation profile for you.",
             fallback="Use --zen only for the user's real session, or desktop automation / computer-control if the exact visible window matters.",
         )
     return report

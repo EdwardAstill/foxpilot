@@ -20,7 +20,7 @@ def register(context: PluginContext) -> Plugin:
         auth_notes=(
             "WARNING: LinkedIn is aggressive about new-device challenges. "
             "Recommended mode is --zen so the user's already-signed-in Zen "
-            "session is reused. Signing in fresh in the claude profile will "
+            "session is reused. Signing in fresh in the automation profile will "
             "likely trigger a verification/challenge prompt — complete it "
             "manually with --visible before the plugin can drive the site."
         ),

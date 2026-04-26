@@ -23,13 +23,20 @@ from foxpilot.evidence import create_evidence_bundle
 from foxpilot.mission import create_mission, load_mission, update_mission_status
 from foxpilot.qa import build_qa_report
 from foxpilot.core import (
+    AUTOMATION_PROFILE_DIR,
     browser,
     burst_screenshots,
     claude_hide,
     claude_show,
     claude_status,
     doctor_report,
+    FOXPILOT_SECRETS_DIR,
+    LEGACY_CLAUDE_PROFILE_DIR,
+    auth_storage_status,
+    auth_storage_report,
+    ensure_auth_storage,
     import_cookies,
+    migrate_legacy_profile,
     describe_element,
     extract_assets,
     extract_styles,
@@ -78,11 +85,27 @@ from foxpilot.sites.linkedin import app as linkedin_app
 from foxpilot.sites.linkedin import set_browser_factory as set_linkedin_browser_factory
 from foxpilot.sites.amazon import app as amazon_app
 from foxpilot.sites.amazon import set_browser_factory as set_amazon_browser_factory
+from foxpilot.sites.instagram import app as instagram_app
+from foxpilot.sites.instagram import set_browser_factory as set_instagram_browser_factory
+from foxpilot.sites.pinterest import app as pinterest_app
+from foxpilot.sites.pinterest import set_browser_factory as set_pinterest_browser_factory
+from foxpilot.sites.twitter import app as twitter_app
+from foxpilot.sites.twitter import set_browser_factory as set_twitter_browser_factory
+from foxpilot.sites.reddit import app as reddit_app
+from foxpilot.sites.reddit import set_browser_factory as set_reddit_browser_factory
+from foxpilot.sites.maps import app as maps_app
+from foxpilot.sites.maps import set_browser_factory as set_maps_browser_factory
+from foxpilot.sites.figma import app as figma_app
+from foxpilot.sites.figma import set_browser_factory as set_figma_browser_factory
 from foxpilot.plugins import Plugin, discover_plugins
 
 app = typer.Typer(
     help="foxpilot — Firefox browser automation for AI agents.",
     no_args_is_help=True,
+)
+auth_app = typer.Typer(
+    help="Explain and manage foxpilot authentication storage.",
+    no_args_is_help=False,
 )
 
 # Global mode — set by callback before subcommand runs
@@ -261,6 +284,42 @@ app.add_typer(
     amazon_app,
     name="amazon",
     help="Amazon search, product, orders, cart, and tracking helpers.",
+)
+set_instagram_browser_factory(_branch_browser)
+app.add_typer(
+    instagram_app,
+    name="instagram",
+    help="Instagram navigation, profile, search, posts, and DM helpers.",
+)
+set_pinterest_browser_factory(_branch_browser)
+app.add_typer(
+    pinterest_app,
+    name="pinterest",
+    help="Pinterest navigation, profile, pins, boards, search, and save helpers.",
+)
+set_twitter_browser_factory(_branch_browser)
+app.add_typer(
+    twitter_app,
+    name="twitter",
+    help="X / Twitter navigation, profile, search, tweet, follow, and DM helpers.",
+)
+set_reddit_browser_factory(_branch_browser)
+app.add_typer(
+    reddit_app,
+    name="reddit",
+    help="Reddit navigation, subreddits, posts, search, submit, and comment helpers.",
+)
+set_maps_browser_factory(_branch_browser)
+app.add_typer(
+    maps_app,
+    name="maps",
+    help="Google Maps search, place lookup, and directions helpers.",
+)
+set_figma_browser_factory(_branch_browser)
+app.add_typer(
+    figma_app,
+    name="figma",
+    help="Figma navigation, file listing, and search helpers.",
 )
 
 
@@ -1121,7 +1180,7 @@ def cmd_doctor(
 
 @app.command(name="show")
 def cmd_show():
-    """Bring the claude-profile Zen window onto the active workspace."""
+    """Bring the automation-profile Zen window onto the active workspace."""
     result = claude_show()
     status = result["status"]
     if status == "not_running":
@@ -1135,7 +1194,7 @@ def cmd_show():
 
 @app.command(name="hide")
 def cmd_hide():
-    """Send the claude-profile Zen window to the special:claude scratchpad."""
+    """Send the automation-profile Zen window to the special:claude scratchpad."""
     result = claude_hide()
     status = result["status"]
     if status == "not_running":
@@ -1152,8 +1211,8 @@ def cmd_import_cookies(
     src: Optional[str] = typer.Option(
         None, "--from", help="Source Zen profile dir (default: auto-detect).",
     ),
-    domain: Optional[str] = typer.Option(
-        None, "--domain", help="Only import cookies whose host LIKE %domain%.",
+    domain: Optional[list[str]] = typer.Option(
+        None, "--domain", help="Only import cookies whose host matches a domain. Repeatable.",
     ),
     include_storage: bool = typer.Option(
         False, "--include-storage", help="Also copy DOM Storage / localStorage.",
@@ -1163,7 +1222,7 @@ def cmd_import_cookies(
         help="Also copy logins.json + key4.db (saved passwords).",
     ),
 ):
-    """Copy cookies from your main Zen profile into the claude profile.
+    """Copy cookies from your main Zen profile into the automation profile.
 
     Bypasses sites that block WebDriver-based logins (Google, Cloudflare-walled
     sites, etc.). Kills the claude Zen process first so files aren't locked.
@@ -1182,10 +1241,114 @@ def cmd_import_cookies(
         raise typer.Exit(1)
     typer.echo(f"✓ imported from: {report['src']}")
     typer.echo(f"  → {report['dst']}")
+    domains = domain or []
     typer.echo(f"  cookies:   {report['cookies_copied']} rows"
-               + (f" (filtered to *{domain}*)" if domain else ""))
+               + (f" (filtered to {', '.join('*' + item + '*' for item in domains)})"
+                  if domains else ""))
     typer.echo(f"  storage:   {'yes' if report['storage_copied'] else 'no'}")
     typer.echo(f"  passwords: {'yes' if report['passwords_copied'] else 'no'}")
+
+
+def _print_auth_init() -> None:
+    report = ensure_auth_storage()
+    report.setdefault(
+        "browser_auth",
+        "cookies/session storage stay in automation_profile_dir",
+    )
+    report.setdefault(
+        "api_secrets",
+        "non-browser tokens belong in secrets_dir, never project .secrets",
+    )
+    _echo_mapping(report)
+
+
+def _print_auth_status() -> None:
+    _echo_mapping(auth_storage_report())
+
+
+@auth_app.callback(invoke_without_command=True)
+def cmd_auth_root(
+    ctx: typer.Context,
+    init: bool = typer.Option(
+        False,
+        "--init",
+        help="Create or repair foxpilot's private auth storage directories.",
+    ),
+):
+    """Show auth status by default, or run --init for compatibility."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if init:
+        _print_auth_init()
+    else:
+        _print_auth_status()
+
+
+@auth_app.command(name="status")
+def cmd_auth_status():
+    """Show paths, status, and what belongs where."""
+    _print_auth_status()
+
+
+@auth_app.command(name="init")
+def cmd_auth_init():
+    """Create or repair private auth storage."""
+    _print_auth_init()
+
+
+@auth_app.command(name="explain")
+def cmd_auth_explain():
+    """Explain foxpilot's authentication model."""
+    typer.echo(
+        "\n".join(
+            [
+                "Foxpilot keeps two different kinds of auth separate:",
+                "",
+                f"1. Browser cookies/session/localStorage -> {AUTOMATION_PROFILE_DIR}",
+                "   This is a real Zen/Firefox profile used only for automation.",
+                "   Browser session auth must stay in browser profile files such as cookies.sqlite.",
+                "",
+                f"2. API tokens/non-browser auth config -> {FOXPILOT_SECRETS_DIR}",
+                "   Use this for future local tokens or config that are not browser cookies.",
+                "",
+                f"Legacy name: {LEGACY_CLAUDE_PROFILE_DIR}",
+                "   If it exists, run `foxpilot auth migrate` to rename it to automation-profile.",
+                "",
+                "Nothing auth-related belongs in a project .secrets directory.",
+            ]
+        )
+    )
+
+
+@auth_app.command(name="doctor")
+def cmd_auth_doctor():
+    """Check auth storage permissions and legacy profile state."""
+    report = auth_storage_status()
+    for key, result in report.items():
+        status = "OK" if result.get("ok") else "x"
+        typer.echo(f"{status} {key:<28} {result.get('message', '')}")
+    if any(not item.get("ok") for item in report.values()):
+        raise typer.Exit(1)
+
+
+@auth_app.command(name="migrate")
+def cmd_auth_migrate():
+    """Rename legacy claude-profile storage to automation-profile when safe."""
+    try:
+        report = migrate_legacy_profile()
+        if report["legacy_migration"] == "moved":
+            storage = ensure_auth_storage()
+            report = report | {
+                "automation_profile_dir": storage["automation_profile_dir"],
+                "secrets_dir": storage["secrets_dir"],
+            }
+    except RuntimeError as e:
+        typer.echo(f"✗ {e}", err=True)
+        raise typer.Exit(1)
+    _echo_mapping(report)
+
+
+app.add_typer(auth_app, name="auth")
 
 
 @app.command(name="status")
@@ -1225,7 +1388,7 @@ def cmd_login(
         "regardless of state.",
     ),
 ):
-    """Open the claude profile visibly so the user can log into sites once.
+    """Open the automation profile visibly so the user can log into sites once.
 
     With --auto-hide (default): polls the page URL every ~2s and, once the URL
     has changed from the initial target and then stayed stable for --stable
@@ -1249,12 +1412,12 @@ def cmd_login(
         driver.get(initial_url)
         if not auto_hide:
             typer.echo(
-                "✓ claude profile open and visible. Run `foxpilot hide` when done."
+                "✓ automation profile open and visible. Run `foxpilot hide` when done."
             )
             return
 
         typer.echo(
-            f"✓ claude profile visible at {initial_url}\n"
+            f"✓ automation profile visible at {initial_url}\n"
             f"  watching for sign-in (URL change + {stable_secs:.0f}s stable).\n"
             f"  ctrl-c to cancel auto-hide and leave window visible."
         )
@@ -1299,7 +1462,7 @@ def cmd_login(
             pass
 
     _hide()
-    typer.echo("✓ hidden — claude profile keeps the cookies for next run.")
+    typer.echo("✓ hidden — automation profile keeps the cookies for next run.")
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ Initial release. Selectors are best-effort; Drive is React-rendered and class na
 
 ## Authentication
 
-Drive requires a signed-in Google account. Use the dedicated Foxpilot claude profile when possible:
+Drive requires a signed-in Google account. Use the dedicated Foxpilot automation profile when possible:
 
 ```bash
 foxpilot login https://drive.google.com

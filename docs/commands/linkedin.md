@@ -24,7 +24,7 @@ LinkedIn is hostile to new-device sessions. The recommended workflow is:
 foxpilot --zen linkedin open feed
 ```
 
-This reuses your already-signed-in Zen browser. Signing in fresh in the claude profile will likely trip a verification prompt — complete it once visibly, then run hidden afterwards:
+This reuses your already-signed-in Zen browser. Signing in fresh in the automation profile will likely trip a verification prompt — complete it once visibly, then run hidden afterwards:
 
 ```bash
 foxpilot login https://www.linkedin.com/

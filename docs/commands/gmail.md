@@ -16,7 +16,7 @@ Sign into Gmail once in the foxpilot browser. Default mode is the **claude** pro
 foxpilot login https://mail.google.com
 ```
 
-After the login window auto-hides, cookies persist in the claude profile across runs. To reuse an existing Zen session instead, pass `--zen`:
+After the login window auto-hides, cookies persist in the automation profile across runs. To reuse an existing Zen session instead, pass `--zen`:
 
 ```bash
 foxpilot --zen gmail list

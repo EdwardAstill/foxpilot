@@ -14,7 +14,7 @@ Default mode is `--zen` so the plugin reuses your real Zen browser's existing Mi
 foxpilot login https://teams.microsoft.com/
 ```
 
-Cookie state then persists across runs in the claude profile.
+Cookie state then persists across runs in the automation profile.
 
 Teams web sometimes embeds content inside `iframe#embedded-page-container`. The service layer's `_switch_to_main_iframe(driver)` helper switches into that iframe before scraping; if Teams stops embedding the iframe, helpers gracefully fall back to top-level DOM.
 

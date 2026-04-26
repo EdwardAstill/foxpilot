@@ -140,7 +140,7 @@ Open and dump cart contents.
 |---|---|---|
 | `unsupported region` | bad `--region` value | use `com`, `com.au`, or `co.uk` |
 | `invalid ASIN` | ASIN not 10 alphanumerics | pass a 10-char ASIN or `/dp/<ASIN>` URL |
-| sign-in redirect on `orders` / `cart` / `track` | session expired or claude profile fresh | rerun with `--zen`, or `foxpilot login https://www.amazon.com.au/` |
+| sign-in redirect on `orders` / `cart` / `track` | session expired or automation profile fresh | rerun with `--zen`, or `foxpilot login https://www.amazon.com.au/` |
 | empty search results | bot-check / CAPTCHA wall | try `--zen --visible` to solve once and retry |
 
 ## Limitations

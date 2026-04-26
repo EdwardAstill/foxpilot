@@ -1,6 +1,6 @@
 # foxpilot
 
-Firefox browser automation for AI agents. Three modes: a dedicated **claude profile** that runs hidden in a Hyprland scratchpad (default), an attach-to-your-real-Zen mode, and a fully ephemeral **headless** mode for stateless research.
+Firefox browser automation for AI agents. Three modes: a dedicated **automation profile** that runs hidden in a Hyprland scratchpad (`claude` mode, the default), an attach-to-your-real-Zen mode, and a fully ephemeral **headless** mode for stateless research.
 
 Available as both a **CLI tool** and an **MCP server** for Claude Code.
 
@@ -24,13 +24,16 @@ Requires:
 
 | Mode | Profile | Window | Shares your session? | Use when |
 |---|---|---|---|---|
-| `claude` (default) | dedicated `~/.local/share/foxpilot/claude-profile` | Hyprland `special:claude` scratchpad (hidden), or active workspace if `--visible` | No — its own profile, you log it in once via `foxpilot login` | The agent should drive a real, authenticated browser without taking over your screen. |
+| `claude` (default) | dedicated `~/.local/share/foxpilot/automation-profile` | Hyprland `special:claude` scratchpad (hidden), or active workspace if `--visible` | No — its own profile, you log it in once via `foxpilot login` | The agent should drive a real, authenticated browser without taking over your screen. |
 | `zen` | your real Zen profile | your real Zen window | Yes — same tabs, same logins | The agent specifically needs to act on your real browsing session (e.g. open a tab in the window you're using). |
 | `headless` | ephemeral, throwaway | none — no display | No | One-shot stateless research where no session is needed and zero side effects are wanted. |
 
 ### Claude mode — how it works
 
-`claude` mode launches Zen with `--no-remote --profile <claude-profile-dir> --marionette --class ClaudeZen --name ClaudeZen`. Before launch, foxpilot writes `marionette.port = 2829` into a `user.js` file inside the profile dir (Firefox / Zen do not honor `--marionette-port` on the command line — the listener port is read from prefs).
+`claude` is the historical CLI mode name. It now uses the neutral
+`automation-profile` directory.
+
+`claude` mode launches Zen with `--no-remote --profile <automation-profile-dir> --marionette --class ClaudeZen --name ClaudeZen`. Before launch, foxpilot writes `marionette.port = 2829` into a `user.js` file inside the profile dir (Firefox / Zen do not honor `--marionette-port` on the command line — the listener port is read from prefs).
 
 That gives the dedicated instance:
 
@@ -50,7 +53,7 @@ The window stays where it was placed across subsequent commands — running an a
 
 #### First-time login
 
-The claude profile starts empty. Two ways to populate it.
+The automation profile starts empty. Two ways to populate it.
 
 **Option 1 — import cookies from your main Zen profile (preferred for sites that block WebDriver):**
 
@@ -58,12 +61,28 @@ The claude profile starts empty. Two ways to populate it.
 foxpilot import-cookies                                  # all cookies, every domain
 foxpilot import-cookies --domain google.com              # filter by host
 foxpilot import-cookies --domain github.com --include-storage   # also localStorage
+foxpilot import-cookies --domain youtube.com --domain google.com --include-storage
 foxpilot import-cookies --include-passwords              # also key4.db + logins.json
 ```
 
-Your main Zen can stay running — foxpilot snapshots the SQLite files first to avoid lock contention. The claude profile is killed during the import and re-launched on the next agent command. After importing, the agent is signed in immediately — no login flow.
+Your main Zen can stay running — foxpilot snapshots the SQLite files first to avoid lock contention. The automation profile is killed during the import and re-launched on the next agent command. After importing, the agent is signed in immediately — no login flow.
 
 This is the only reliable approach for sites with active anti-automation (Google, Cloudflare-walled apps, Twitter/X, Discord). They detect Marionette/WebDriver and refuse to let an automated browser sign in even with valid credentials.
+
+Browser auth is stored as browser profile state, not in a project `.secrets`
+folder. Foxpilot creates private auth storage under
+`~/.local/share/foxpilot/`:
+
+- `automation-profile/` contains cookies, localStorage, and `user.js`.
+- `secrets/` is reserved for non-browser API tokens or local auth config.
+
+Run `foxpilot auth init` to create or repair those directories with owner-only
+permissions (`0700`). Imported cookie databases and related profile files are
+kept owner-only (`0600`). Do not symlink these directories and do not commit
+their contents.
+
+Run `foxpilot auth explain` for the full model, or read
+`docs/commands/auth.md`.
 
 **Option 2 — interactive login (sites that don't block WebDriver):**
 
@@ -74,7 +93,7 @@ foxpilot login https://github.com       # opens straight to a login page
 
 The window appears visibly on your active workspace. You sign in. Once the URL changes and stays stable for ~8 seconds (the typical post-login redirect to a dashboard), the browser auto-hides. Pass `--no-auto-hide` to keep it visible.
 
-Cookies persist in `~/.local/share/foxpilot/claude-profile` regardless of which method you used.
+Cookies persist in `~/.local/share/foxpilot/automation-profile` regardless of which method you used.
 
 #### Limitation
 
@@ -116,7 +135,7 @@ foxpilot --zen doctor
 That prints the exact attach state plus the recommended fallback:
 
 - `status=ready` → proceed with `foxpilot --zen ...`
-- `status=needs_marionette` → either restart Zen with `--marionette`, or switch to the dedicated claude profile / desktop automation
+- `status=needs_marionette` → either restart Zen with `--marionette`, or switch to the dedicated automation profile / desktop automation
 - `status=blocked` → the environment cannot reach local browser sockets; run foxpilot outside the sandbox or hand off to desktop automation
 
 ### Why `zen-browser --marionette` and not just `zen-browser`
@@ -138,7 +157,7 @@ foxpilot [--zen | --visible | --headless-mode] <command> [args]
 
 | Flag | Effect |
 |---|---|
-| *(none)* | **Default** — uses the dedicated `claude` profile, hidden in `special:claude` workspace. |
+| *(none)* | **Default** — uses the dedicated automation profile in `claude` mode, hidden in `special:claude` workspace. |
 | `-V` / `--visible` | With `claude` mode, places the window on your active workspace for this run. |
 | `-z` / `--zen` | Operate on your real running Zen instance instead. |
 | `--headless-mode` | Force ephemeral headless Firefox (no profile, no session). |
@@ -146,8 +165,8 @@ foxpilot [--zen | --visible | --headless-mode] <command> [args]
 Examples:
 
 ```bash
-foxpilot go https://example.com           # claude profile, hidden
-foxpilot --visible go https://example.com # claude profile, on screen
+foxpilot go https://example.com           # automation profile, hidden
+foxpilot --visible go https://example.com # automation profile, on screen
 foxpilot --zen tabs                        # your real Zen
 foxpilot --headless-mode search "query"   # one-shot ephemeral
 ```
@@ -203,7 +222,7 @@ foxpilot doctor
 foxpilot doctor --fix
 ```
 
-Checks include Python, `geckodriver`, Firefox, Zen, local WebDriver socket binding, `hyprctl`, and claude profile path writability. `--fix` performs safe local repairs such as creating the claude profile parent directory before reporting. A failed check exits nonzero.
+Checks include Python, `geckodriver`, Firefox, Zen, local WebDriver socket binding, `hyprctl`, and auth storage writability. `--fix` performs safe local repairs such as creating private auth storage directories before reporting. A failed check exits nonzero.
 
 #### `tabs`
 
@@ -400,13 +419,13 @@ foxpilot close-tab
 foxpilot --zen close-tab 3
 ```
 
-### Claude profile lifecycle
+### Automation profile lifecycle
 
 Manages the dedicated `claude`-mode Zen instance — does not perform browser actions.
 
 #### `login [url]`
 
-Open the claude profile **visibly** so you can sign into a site once. Cookies persist in the profile dir, so subsequent hidden agent commands reuse the session.
+Open the automation profile **visibly** so you can sign into a site once. Cookies persist in the profile dir, so subsequent hidden agent commands reuse the session.
 
 ```bash
 foxpilot login                          # opens about:preferences
@@ -415,7 +434,7 @@ foxpilot login https://github.com       # opens straight to a login page
 
 #### `show` / `hide`
 
-Move the claude Zen window between the active workspace (`show`) and the `special:claude` Hyprland scratchpad (`hide`).
+Move the automation Zen window between the active workspace (`show`) and the `special:claude` Hyprland scratchpad (`hide`).
 
 ```bash
 foxpilot show
@@ -435,7 +454,7 @@ foxpilot status
 # window_present     True
 # visible            False
 # workspace          special:claude
-# profile_dir        /home/you/.local/share/foxpilot/claude-profile
+# profile_dir        /home/you/.local/share/foxpilot/automation-profile
 # marionette_port    2829
 
 foxpilot --zen status
@@ -447,7 +466,7 @@ foxpilot --zen status
 ```
 
 `foxpilot --zen status` reports the real Zen session. It no longer echoes the
-claude-profile state by mistake.
+automation-profile state by mistake.
 
 #### `doctor`
 
@@ -463,23 +482,46 @@ foxpilot --zen doctor
 # fallback           Otherwise use claude mode with import-cookies, or hand off to desktop automation / computer-control for the visible window.
 ```
 
-#### `import-cookies [--from PATH] [--domain SUB] [--include-storage] [--include-passwords]`
+#### `auth`
 
-Copy cookies from your main Zen profile into the claude profile. Required for sites that block WebDriver-controlled sign-in (Google et al.). Auto-detects the source profile from `~/.zen/profiles.ini` if `--from` is omitted.
+Show, explain, create, repair, and migrate foxpilot auth storage.
+
+```bash
+foxpilot auth
+foxpilot auth status
+foxpilot auth init
+foxpilot auth explain
+foxpilot auth doctor
+foxpilot auth migrate
+```
+
+`auth init` creates or repairs `~/.local/share/foxpilot/automation-profile`
+and `~/.local/share/foxpilot/secrets` with owner-only permissions. Browser
+cookies stay in the browser profile; API tokens or other non-browser secrets
+belong in the `secrets` directory, never in a repo-local `.secrets` folder.
+
+`auth migrate` renames the legacy `claude-profile` directory to
+`automation-profile` when the new directory does not already exist. If both
+exist, foxpilot refuses to merge them automatically.
+
+#### `import-cookies [--from PATH] [--domain SUB]... [--include-storage] [--include-passwords]`
+
+Copy cookies from your main Zen profile into the automation profile. Required for sites that block WebDriver-controlled sign-in (Google et al.). Auto-detects the source profile from `~/.zen/profiles.ini` if `--from` is omitted.
 
 ```
 --from              Source Zen profile dir (default: auto-detect)
---domain            Only import cookies whose host LIKE %domain%
+--domain            Only import cookies whose host matches a domain; repeatable
 --include-storage   Also copy webappsstore.sqlite (localStorage)
 --include-passwords Also copy logins.json + key4.db
 ```
 
 ```bash
 foxpilot import-cookies --domain google.com --include-storage
+foxpilot import-cookies --domain youtube.com --domain google.com --include-storage
 foxpilot go https://myaccount.google.com    # already signed in
 ```
 
-Stops the claude Zen process before writing, snapshots the source SQLite files first so the user's live Zen doesn't lock the import.
+Stops the automation Zen process before writing, snapshots the source SQLite files first so the user's live Zen doesn't lock the import.
 
 ### Design inspection
 
@@ -880,4 +922,4 @@ foxpilot/
 └── readability.py  Main content extraction heuristics
 ```
 
-The `claude` profile lives at `~/.local/share/foxpilot/claude-profile/`. foxpilot manages a `user.js` inside it that pins `marionette.port = 2829`. Cookies imported via `import-cookies` land at `<profile>/cookies.sqlite`.
+The automation profile lives at `~/.local/share/foxpilot/automation-profile/`. foxpilot manages a `user.js` inside it that pins `marionette.port = 2829`. Cookies imported via `import-cookies` land at `<profile>/cookies.sqlite`. Foxpilot also owns `~/.local/share/foxpilot/secrets/` for non-browser tokens; browser cookies are not duplicated there. Older installs may still have `~/.local/share/foxpilot/claude-profile/`; run `foxpilot auth migrate` to rename it when safe.
